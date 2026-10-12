@@ -1,5 +1,5 @@
 {
-  "name": "Zebgen Wallet",
+  "name": "zebgen",
   "description": "manifest.json description",
   "private": true,
   "version": "0.0.0",
@@ -12,7 +12,8 @@
     "zip": "wxt zip",
     "zip:firefox": "wxt zip -b firefox",
     "compile": "tsc --noEmit",
-    "postinstall": "wxt prepare"
+    "postinstall": "wxt prepare",
+    "release": "semantic-release"
   },
   "dependencies": {
     "@algorandfoundation/xhd-wallet-api": "2.0.0-canary.1",
@@ -26,9 +27,15 @@
     "react-dom": "^19.2.4"
   },
   "devDependencies": {
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/exec": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^11.0.1",
+    "@semantic-release/npm": "^12.0.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@wxt-dev/module-react": "^1.1.5",
+    "semantic-release": "^24.2.3",
     "typescript": "^5.9.3",
     "vite-plugin-node-polyfills": "^0.28.0",
     "wxt": "^0.20.27"

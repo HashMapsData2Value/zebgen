@@ -5,6 +5,7 @@ import { nodePolyfills } from 'vite-plugin-node-polyfills';
 export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifest: {
+    name: 'Zebgen Wallet',
     permissions: ['storage'],
     // Required so extension fetches (algod/indexer and the Monero daemon RPC)
     // bypass CORS. Add any custom remote daemon/indexer hosts you configure.
