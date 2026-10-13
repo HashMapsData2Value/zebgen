@@ -132,6 +132,21 @@ h2 {
   box-shadow: 0 0 0 2px rgba(167, 134, 255, 0.28);
 }
 
+.import-form .checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.import-form .checkbox-label input {
+  width: auto;
+  accent-color: #a786ff;
+}
+
+.import-form input:disabled {
+  opacity: 0.5;
+}
+
 .import-form button {
   margin-top: 0.2rem;
   background: linear-gradient(140deg, #6d35ff, #9e4cff);

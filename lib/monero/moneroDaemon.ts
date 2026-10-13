@@ -3,6 +3,7 @@ import initMoneroWasm, {
   daemonHeight,
   primaryAddress,
   publicKeyFromPrivate,
+  sweepTransaction,
 } from 'zebgen-monero-wasm';
 import moneroWasmUrl from 'zebgen-monero-wasm/zebgen_monero_wasm_bg.wasm?url';
 
@@ -38,7 +39,10 @@ export interface CreateMoneroTransactionRequest {
   privateSpendKey: string;
   privateViewKey: string;
   recipient: string;
+  // Ignored when `sweep` is true.
   amountAtomic: string;
+  // Send the whole unlocked balance minus the fee.
+  sweep?: boolean;
   restoreHeight: number;
   relay: boolean;
 }
@@ -73,8 +77,8 @@ export async function createMoneroTransaction(
   }
 
   try {
-    const amountAtomic = BigInt(request.amountAtomic);
-    if (amountAtomic <= 0n) {
+    const amountAtomic = request.sweep ? 0n : BigInt(request.amountAtomic);
+    if (!request.sweep && amountAtomic <= 0n) {
       return { ok: false, error: 'Amount must be greater than zero.' };
     }
     await loadMoneroWasm();
@@ -88,22 +92,23 @@ export async function createMoneroTransaction(
       return { ok: false, error: 'Wallet keys do not match the wallet address.' };
     }
 
-    const transaction: {
-      hash: string;
-      feeAtomic: string;
-      amountAtomic: string;
-      balanceAtomic: string;
-      relayed: boolean;
-    } = await createTransaction(
+    const wallet = [
       ...daemonConnection(request.config),
       request.config.networkType,
       request.privateSpendKey,
       request.privateViewKey,
       request.restoreHeight,
       request.recipient,
-      amountAtomic.toString(),
-      request.relay
-    );
+    ] as const;
+    const transaction: {
+      hash: string;
+      feeAtomic: string;
+      amountAtomic: string;
+      balanceAtomic: string;
+      relayed: boolean;
+    } = request.sweep
+      ? await sweepTransaction(...wallet, request.relay)
+      : await createTransaction(...wallet, amountAtomic.toString(), request.relay);
     return {
       ok: true,
       hash: transaction.hash,

@@ -35,6 +35,7 @@ interface MoneroTransactionBuilderProps {
   chain: 'monero';
   material: MoneroKeyMaterial;
   config: MoneroNetworkConfig;
+  defaultRestoreHeight?: number;
 }
 
 type TransactionBuilderProps = AlgorandTransactionBuilderProps | MoneroTransactionBuilderProps;
@@ -43,7 +44,10 @@ function TransactionBuilder(props: TransactionBuilderProps) {
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
-  const [restoreHeight, setRestoreHeight] = useState('0');
+  const [restoreHeight, setRestoreHeight] = useState(
+    String((props.chain === 'monero' && props.defaultRestoreHeight) || 0)
+  );
+  const [sendAll, setSendAll] = useState(false);
   const [isReviewing, setIsReviewing] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +57,7 @@ function TransactionBuilder(props: TransactionBuilderProps) {
   const symbol = props.chain === 'algorand' ? 'ALGO' : 'XMR';
   const sender = props.chain === 'algorand' ? props.sender : props.material.address;
   const network = props.chain === 'algorand' ? props.network : props.config.network;
+  const isSweep = props.chain === 'monero' && sendAll;
 
   function resetReview() {
     setIsReviewing(false);
@@ -63,7 +68,9 @@ function TransactionBuilder(props: TransactionBuilderProps) {
     event.preventDefault();
     setError(null);
     try {
-      parseUnits(amount, decimals);
+      if (!isSweep) {
+        parseUnits(amount, decimals);
+      }
       if (!recipient.trim()) {
         throw new Error('Recipient address is required.');
       }
@@ -87,13 +94,12 @@ function TransactionBuilder(props: TransactionBuilderProps) {
       await ensureHostPermissions([
         props.chain === 'algorand' ? props.endpoint.server : props.config.daemon.uri,
       ]);
-      const atomicAmount = parseUnits(amount, decimals);
       if (props.chain === 'algorand') {
         const sent = await sendAlgoPayment(
           props.lockSecret,
           props.addressIndex,
           recipient.trim(),
-          atomicAmount,
+          parseUnits(amount, decimals),
           props.endpoint,
           note
         );
@@ -105,7 +111,8 @@ function TransactionBuilder(props: TransactionBuilderProps) {
           privateSpendKey: props.material.privateSpendKey,
           privateViewKey: props.material.privateViewKey,
           recipient: recipient.trim(),
-          amountAtomic: atomicAmount.toString(),
+          amountAtomic: isSweep ? '0' : parseUnits(amount, decimals).toString(),
+          sweep: isSweep,
           restoreHeight: Number(restoreHeight),
           relay: true,
         });
@@ -113,7 +120,7 @@ function TransactionBuilder(props: TransactionBuilderProps) {
           throw new Error(sent.error ?? 'Unable to create Monero transaction.');
         }
         setResult(
-          `Relayed ${sent.hash ?? 'transaction'} · fee ${sent.feeAtomic ?? 'unknown'} piconero`
+          `Relayed ${sent.hash ?? 'transaction'} · amount ${sent.amountAtomic ?? 'unknown'} · fee ${sent.feeAtomic ?? 'unknown'} piconero`
         );
       }
       setIsReviewing(false);
@@ -155,7 +162,8 @@ function TransactionBuilder(props: TransactionBuilderProps) {
             }}
             placeholder="0.0"
             inputMode="decimal"
-            required
+            required={!isSweep}
+            disabled={isSweep}
           />
           {props.chain === 'algorand' ? (
             <>
@@ -164,6 +172,18 @@ function TransactionBuilder(props: TransactionBuilderProps) {
             </>
           ) : (
             <>
+              <label className="checkbox-label" htmlFor="monero-tx-send-all">
+                <input
+                  id="monero-tx-send-all"
+                  type="checkbox"
+                  checked={sendAll}
+                  onChange={(event) => {
+                    setSendAll(event.target.checked);
+                    resetReview();
+                  }}
+                />
+                Send entire balance (minus fee)
+              </label>
               <label htmlFor="monero-restore-height">Wallet restore height</label>
               <input
                 id="monero-restore-height"
@@ -172,7 +192,10 @@ function TransactionBuilder(props: TransactionBuilderProps) {
                 inputMode="numeric"
                 required
               />
-              <p className="hint">Use a height at or before this address first received funds.</p>
+              <p className="hint">
+                Scanning starts at this block. It's filled in from when this wallet (or swap) was
+                created; for an imported wallet, use a height at or before it first received funds.
+              </p>
             </>
           )}
           <button type="submit">Review Transaction</button>
@@ -181,7 +204,7 @@ function TransactionBuilder(props: TransactionBuilderProps) {
         <div className="transaction-review">
           <p><span>From</span><code>{sender}</code></p>
           <p><span>To</span><code>{recipient.trim()}</code></p>
-          <p><span>Amount</span><strong>{amount} {symbol}</strong></p>
+          <p><span>Amount</span><strong>{isSweep ? 'Entire balance minus fee' : `${amount} ${symbol}`}</strong></p>
           <p><span>Network</span><strong>{network}</strong></p>
           {props.chain === 'monero' ? <p><span>Restore height</span><strong>{restoreHeight}</strong></p> : null}
           <div className="transaction-actions">

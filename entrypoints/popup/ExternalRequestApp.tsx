@@ -3,6 +3,7 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import { useEffect, useState, type FormEvent } from 'react';
 import { browser } from 'wxt/browser';
 
+import { currentRestoreHeight, rememberSwapAddressHeight } from '../../lib/monero/restoreHeight';
 import { getNetworkSettings } from '../../lib/network/networkStore';
 import { base64ToBytes, bytesToBase64 } from '../../lib/provider/base64';
 import type { GetPendingRequestResponse, PendingZebgenRequest } from '../../lib/provider/types';
@@ -220,13 +221,19 @@ async function computeResult(pending: PendingZebgenRequest, secret: string): Pro
     if (!material) {
       throw new Error('No Monero wallet found. Create one in the wallet first.');
     }
-    return computeCombinedAddressWithPrivateAndPublic(
+    const combined = computeCombinedAddressWithPrivateAndPublic(
       material.privateSpendKey,
       material.privateViewKey,
       params.counterpartyPrivateViewKey,
       params.counterpartyPublicSpendKey,
       networkSettings.monero.networkType
     );
+    // A new swap address can't hold funds from before now; recovery later scans from here.
+    const height = await currentRestoreHeight(networkSettings.monero);
+    if (height !== undefined) {
+      await rememberSwapAddressHeight(combined.combinedAddress, height);
+    }
+    return combined;
   }
 
   if (pending.type === 'signAlgorandTransactions') {

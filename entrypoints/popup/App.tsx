@@ -42,6 +42,7 @@ import {
   type NetworkSettings,
 } from '../../lib/network/networks';
 import { getNetworkSettings, saveNetworkSettings } from '../../lib/network/networkStore';
+import { currentRestoreHeight, swapAddressHeight } from '../../lib/monero/restoreHeight';
 import AlgorandAddressCard from './AlgorandAddressCard';
 import MoneroAddressCard from './MoneroAddressCard';
 import MoneroKeyList from './MoneroKeyList';
@@ -345,7 +346,11 @@ function App({ variant = 'popup' }: AppProps) {
       if (!material) {
         throw new Error('Generate or import Monero key material first.');
       }
-      const activeWalletId = await saveMoneroWallet(material, sessionLockSecret);
+      // A freshly generated wallet can't have funds from before now; an imported one might.
+      const restoreHeight = moneroSetupMode === 'import'
+        ? undefined
+        : await currentRestoreHeight(networkSettings.monero);
+      const activeWalletId = await saveMoneroWallet(material, sessionLockSecret, restoreHeight);
       const moneroState = await getMoneroWalletState();
       setMoneroMaterial(material);
       setMoneroWallets(moneroState.wallets);
@@ -432,7 +437,8 @@ function App({ variant = 'popup' }: AppProps) {
     setError(null);
     setIsSubmitting(true);
     try {
-      const activeWalletId = await saveMoneroWallet(recoveredMaterial, sessionLockSecret);
+      const restoreHeight = await swapAddressHeight(recoveredMaterial.address);
+      const activeWalletId = await saveMoneroWallet(recoveredMaterial, sessionLockSecret, restoreHeight);
       const moneroState = await getMoneroWalletState();
       setMoneroMaterial(recoveredMaterial);
       setMoneroWallets(moneroState.wallets);
@@ -900,6 +906,7 @@ function App({ variant = 'popup' }: AppProps) {
               chain="monero"
               material={moneroMaterial}
               config={networkSettings.monero}
+              defaultRestoreHeight={moneroWallets[activeMoneroWalletIndex]?.restoreHeight}
             />
           ) : (
             <p className="hint">Loading transaction builder...</p>

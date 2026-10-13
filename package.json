@@ -25,7 +25,7 @@
     "idb": "^8.0.3",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "zebgen-monero-wasm": "0.1.1"
+    "zebgen-monero-wasm": "0.2.0"
   },
   "devDependencies": {
     "@semantic-release/changelog": "^6.0.3",

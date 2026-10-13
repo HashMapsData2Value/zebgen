@@ -19,6 +19,7 @@ export interface MoneroWalletSummary {
   id: number;
   address: string;
   createdAt: string;
+  restoreHeight?: number;
 }
 
 export interface MoneroWalletState {
@@ -32,7 +33,7 @@ export async function getMoneroWalletState(): Promise<MoneroWalletState> {
   const wallets = records.flatMap((record) =>
     record.id === undefined
       ? []
-      : [{ id: record.id, address: record.address, createdAt: record.createdAt }]
+      : [{ id: record.id, address: record.address, createdAt: record.createdAt, restoreHeight: record.restoreHeight }]
   );
   const activeWalletId = wallets.some((wallet) => wallet.id === meta?.activeMoneroKeyId)
     ? meta?.activeMoneroKeyId ?? null
@@ -46,7 +47,8 @@ export async function getMoneroWalletState(): Promise<MoneroWalletState> {
 
 export async function saveMoneroWallet(
   material: MoneroKeyMaterial,
-  lockSecret: string
+  lockSecret: string,
+  restoreHeight?: number
 ): Promise<number> {
   await unlockWallet(lockSecret);
   const privateSpendKeyBytes = hexToBytes(material.privateSpendKey);
@@ -59,6 +61,7 @@ export async function saveMoneroWallet(
       iv: vault.iv,
       address: material.address,
       createdAt: new Date().toISOString(),
+      restoreHeight,
     });
     const meta = await getWalletMeta();
     if (!meta) {

@@ -19,6 +19,8 @@ export interface MoneroKeyRecord {
   iv: Uint8Array;
   address: string;
   createdAt: string;
+  // First block that can hold this wallet's funds; absent for imported wallets.
+  restoreHeight?: number;
 }
 
 export interface WalletMeta {

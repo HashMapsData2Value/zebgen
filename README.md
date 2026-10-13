@@ -90,6 +90,8 @@ zebgen extension (keys never leave)              any Monero node you choose
   for browser permission the first time it contacts a host other than
   `localhost`/`127.0.0.1`. Nodes running `--restricted-rpc` (the usual mode
   for public nodes) work, and so do username/password logins.
+- **Send entire balance:** the Send XMR form can send everything except the
+  fee in one transaction, e.g. to empty a recovered swap wallet.
 
 ### Limitations and trade-offs
 
@@ -105,9 +107,12 @@ zebgen extension (keys never leave)              any Monero node you choose
   requests data, even though the transactions themselves are built to look
   like ones from Monero's own wallet.
 - **Scanning costs bandwidth.** zebgen downloads every block from the restore
-  height onward. Starting from a recent height (e.g. when the wallet or swap
-  was created) keeps this small; starting at 0 on mainnet would download the
-  whole chain.
+  height onward. It records the chain height (minus a 20-block safety margin)
+  when it generates a wallet and when it computes a swap's combined address,
+  and pre-fills that in Send XMR, so only blocks since then are downloaded.
+  Imported wallets have no recorded height: enter one at or before the wallet
+  first received funds, because 0 on mainnet means downloading the whole chain.
+  If the node can't be reached at creation time, no height is recorded.
 - **Node logins:** monerod's built-in login (HTTP Digest) only works if the
   browser reuses the same network connection, which Chrome does. Over the
   internet, use HTTPS.
