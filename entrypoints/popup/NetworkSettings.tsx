@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import { probeAlgod, probeIndexer } from '../../lib/algorand/algodClient';
+import { ensureHostPermissions } from '../../lib/network/hostPermissions';
 import { probeMoneroDaemonViaBackground } from '../../lib/network/messages';
 import {
   ALGORAND_NETWORK_IDS,
@@ -59,6 +60,12 @@ function NetworkSettingsPanel({ chain, settings, onChange }: NetworkSettingsPane
 
   async function onTestAlgod() {
     setAlgodProbe({ status: 'testing' });
+    try {
+      await ensureHostPermissions([settings.algorand.algod.server]);
+    } catch (err) {
+      setAlgodProbe({ status: 'error', message: err instanceof Error ? err.message : String(err) });
+      return;
+    }
     const result = await probeAlgod(settings.algorand.algod);
     setAlgodProbe(
       result.ok
@@ -69,6 +76,12 @@ function NetworkSettingsPanel({ chain, settings, onChange }: NetworkSettingsPane
 
   async function onTestIndexer() {
     setIndexerProbe({ status: 'testing' });
+    try {
+      await ensureHostPermissions([settings.algorand.indexer.server]);
+    } catch (err) {
+      setIndexerProbe({ status: 'error', message: err instanceof Error ? err.message : String(err) });
+      return;
+    }
     const result = await probeIndexer(settings.algorand.indexer);
     setIndexerProbe(
       result.ok
@@ -80,6 +93,7 @@ function NetworkSettingsPanel({ chain, settings, onChange }: NetworkSettingsPane
   async function onTestDaemon() {
     setDaemonProbe({ status: 'testing' });
     try {
+      await ensureHostPermissions([settings.monero.daemon.uri]);
       const result = await probeMoneroDaemonViaBackground(settings.monero);
       setDaemonProbe(
         result.ok

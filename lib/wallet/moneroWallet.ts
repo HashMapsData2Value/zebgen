@@ -2,9 +2,7 @@ import { ed25519 } from '@noble/curves/ed25519.js';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 
-// Local copy of monero-ts's MoneroNetworkType enum. Importing it from `monero-ts`
-// pulls the entire library (wasm, workers, node deps) into the popup bundle, which
-// fails to load in the MV3 popup context. Values mirror monero-ts exactly.
+// Monero network types, numbered as in monero-ts and zebgen-monero-wasm.
 export enum MoneroNetworkType {
   MAINNET = 0,
   TESTNET = 1,

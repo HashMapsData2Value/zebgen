@@ -19,6 +19,7 @@ jobs:
         with: { node-version: '22' }
       - run: npm ci
       - run: npm run compile
+      - run: npm test
       - run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

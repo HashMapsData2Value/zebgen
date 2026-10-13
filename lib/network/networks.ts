@@ -1,6 +1,6 @@
 import { MoneroNetworkType } from '../wallet/moneroWallet';
 
-// This module is intentionally free of heavy dependencies (no monero-ts, no
+// This module is intentionally free of heavy dependencies (no WebAssembly, no
 // algosdk) so it can be imported anywhere — popup, background, or content —
 // without bloating a bundle or breaking the MV3 popup.
 

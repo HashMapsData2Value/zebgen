@@ -1,8 +1,30 @@
+import initMoneroWasm, {
+  createTransaction,
+  daemonHeight,
+  primaryAddress,
+  publicKeyFromPrivate,
+} from 'zebgen-monero-wasm';
+import moneroWasmUrl from 'zebgen-monero-wasm/zebgen_monero_wasm_bg.wasm?url';
+
 import type { MoneroNetworkConfig } from '../network/networks';
 
-// IMPORTANT: This module must only be imported from the background service
-// worker. It dynamically imports the heavy `monero-ts` library so it is never
-// pulled into the popup bundle (which breaks the MV3 popup).
+// Background-service-worker only: scanning, signing and relaying run in the
+// zebgen-monero-wasm module (monero-oxide compiled to WebAssembly).
+
+let wasmReady: Promise<unknown> | undefined;
+function loadMoneroWasm(): Promise<unknown> {
+  // Explicit URL: the bundled service worker has no usable import.meta.url.
+  wasmReady ??= initMoneroWasm({ module_or_path: moneroWasmUrl });
+  return wasmReady;
+}
+
+function daemonConnection(config: MoneroNetworkConfig): [string, string | undefined, string | undefined] {
+  return [config.daemon.uri, config.daemon.username || undefined, config.daemon.password || undefined];
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 export interface MoneroDaemonProbeResult {
   ok: boolean;
@@ -35,18 +57,11 @@ export async function probeMoneroDaemon(
   config: MoneroNetworkConfig
 ): Promise<MoneroDaemonProbeResult> {
   try {
-    const monero = await import('monero-ts');
-    const daemon = await monero.connectToDaemonRpc({
-      uri: config.daemon.uri,
-      username: config.daemon.username || undefined,
-      password: config.daemon.password || undefined,
-      // Run in-thread: nested workers are unavailable in an MV3 service worker.
-      proxyToWorker: false,
-    });
-    const height = await daemon.getHeight();
+    await loadMoneroWasm();
+    const height = await daemonHeight(...daemonConnection(config));
     return { ok: true, height };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: errorMessage(err) };
   }
 }
 
@@ -57,41 +72,48 @@ export async function createMoneroTransaction(
     return { ok: false, error: 'Restore height must be a non-negative integer.' };
   }
 
-  let wallet: Awaited<ReturnType<typeof import('monero-ts')['createWalletFull']>> | undefined;
   try {
     const amountAtomic = BigInt(request.amountAtomic);
     if (amountAtomic <= 0n) {
       return { ok: false, error: 'Amount must be greater than zero.' };
     }
-    const monero = await import('monero-ts');
-    wallet = await monero.createWalletFull({
-      networkType: request.config.networkType,
-      primaryAddress: request.primaryAddress,
-      privateSpendKey: request.privateSpendKey,
-      privateViewKey: request.privateViewKey,
-      restoreHeight: request.restoreHeight,
-      server: request.config.daemon,
-      proxyToWorker: false,
-    });
-    await wallet.sync(request.restoreHeight);
-    const balanceAtomic = await wallet.getUnlockedBalance();
-    const transaction = await wallet.createTx({
-      accountIndex: 0,
-      address: request.recipient,
-      amount: amountAtomic,
-      relay: request.relay,
-    });
+    await loadMoneroWasm();
+
+    const derivedAddress = primaryAddress(
+      request.config.networkType,
+      publicKeyFromPrivate(request.privateSpendKey),
+      request.privateViewKey
+    );
+    if (derivedAddress !== request.primaryAddress) {
+      return { ok: false, error: 'Wallet keys do not match the wallet address.' };
+    }
+
+    const transaction: {
+      hash: string;
+      feeAtomic: string;
+      amountAtomic: string;
+      balanceAtomic: string;
+      relayed: boolean;
+    } = await createTransaction(
+      ...daemonConnection(request.config),
+      request.config.networkType,
+      request.privateSpendKey,
+      request.privateViewKey,
+      request.restoreHeight,
+      request.recipient,
+      amountAtomic.toString(),
+      request.relay
+    );
     return {
       ok: true,
-      hash: transaction.getHash(),
-      feeAtomic: transaction.getFee().toString(),
-      amountAtomic: transaction.getOutgoingAmount().toString(),
-      balanceAtomic: balanceAtomic.toString(),
-      relayed: transaction.getIsRelayed(),
+      hash: transaction.hash,
+      feeAtomic: transaction.feeAtomic,
+      amountAtomic: transaction.amountAtomic,
+      balanceAtomic: transaction.balanceAtomic,
+      relayed: transaction.relayed,
     };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  } finally {
-    await wallet?.close(false).catch(() => undefined);
+    console.error('createMoneroTransaction failed', err);
+    return { ok: false, error: errorMessage(err) };
   }
 }

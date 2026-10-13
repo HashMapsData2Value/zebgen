@@ -1,7 +1,10 @@
 # Known Issue: Real Monero Transactions Blocked by MV3 CSP (`eval`/`new Function`)
 
-**Status:** Open, unresolved. Discovered while building a full browser-automation
-end-to-end test that drives the real zebgen extension UI.
+**Status:** Resolved by replacing `monero-ts` with
+[`zebgen-monero-wasm`](https://github.com/HashMapsData2Value/zebgen-monero-wasm). Kept as a
+historical record of the first of three `monero-ts` problems; see the
+[README](../README.md#monero-why-zebgen-monero-wasm-instead-of-monero-ts) for the full story.
+The original write-up follows unchanged.
 
 ## The issue
 

@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 
 import { createMoneroTransactionViaBackground } from '../../lib/network/messages';
+import { ensureHostPermissions } from '../../lib/network/hostPermissions';
 import type { AlgodEndpoint, MoneroNetworkConfig } from '../../lib/network/networks';
 import { sendAlgoPayment } from '../../lib/wallet/algoWallet';
 import type { MoneroKeyMaterial } from '../../lib/wallet/moneroWallet';
@@ -83,6 +84,9 @@ function TransactionBuilder(props: TransactionBuilderProps) {
     setResult(null);
     setIsSubmitting(true);
     try {
+      await ensureHostPermissions([
+        props.chain === 'algorand' ? props.endpoint.server : props.config.daemon.uri,
+      ]);
       const atomicAmount = parseUnits(amount, decimals);
       if (props.chain === 'algorand') {
         const sent = await sendAlgoPayment(
