@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/HashMapsData2Value/zebgen/compare/v1.1.0...v1.2.0) (2026-10-13)
+
+
+### Features
+
+* **monero:** automatic restore heights and send entire balance ([901db5b](https://github.com/HashMapsData2Value/zebgen/commit/901db5b76e21d11d5f0647b03dab079c75ccb7ff))
+
 # [1.1.0](https://github.com/HashMapsData2Value/zebgen/compare/v1.0.0...v1.1.0) (2026-10-13)
 
 
