@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/HashMapsData2Value/zebgen/compare/v1.0.0...v1.1.0) (2026-10-13)
+
+
+### Features
+
+* **monero:** send XMR with zebgen-monero-wasm (monero-oxide) instead of monero-ts ([a67cf0c](https://github.com/HashMapsData2Value/zebgen/commit/a67cf0ce98d61eb182699d958fa4006644dac574))
+
 # 1.0.0 (2026-10-12)
 
 
