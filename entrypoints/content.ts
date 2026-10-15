@@ -1,5 +1,7 @@
 import { browser } from 'wxt/browser';
 
+import { PROVIDER_PAGE_MATCHES } from '../lib/provider/pageMatches';
+import { validateProviderRequest } from '../lib/provider/fundingValidation';
 import type {
   ZebgenBackgroundRequest,
   ZebgenBackgroundResponse,
@@ -12,7 +14,7 @@ import type {
 // script. Runs in the extension's isolated world, so it has runtime messaging
 // access but cannot see or be seen by the page's own JS objects directly.
 export default defineContentScript({
-  matches: ['http://localhost/*', 'http://127.0.0.1/*'],
+  matches: PROVIDER_PAGE_MATCHES,
   main() {
     window.addEventListener('message', (event) => {
       if (event.source !== window) {
@@ -20,6 +22,13 @@ export default defineContentScript({
       }
       const data = event.data as ZebgenPageRequest | undefined;
       if (!data || data.source !== 'zebgen-page') {
+        return;
+      }
+
+      try {
+        validateProviderRequest(data.type, data.params);
+      } catch (error) {
+        postResponse(data.id, { ok: false, error: error instanceof Error ? error.message : String(error) });
         return;
       }
 

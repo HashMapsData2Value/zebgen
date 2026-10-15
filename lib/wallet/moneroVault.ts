@@ -1,4 +1,5 @@
 import { hexToBytes } from '@noble/hashes/utils.js';
+import { browser } from 'wxt/browser';
 
 import {
   addMoneroKeyRecord,
@@ -10,10 +11,57 @@ import {
 import { unlockWallet } from './algoWallet';
 import {
   getMoneroKeyMaterialFromPrivateSpendKey,
+  getCompleteAddressFromPrivate,
+  getPublicKeyFromPrivateScalar,
+  computeCombinedAddressWithPrivateAndPublic,
+  MoneroNetworkType,
   type MoneroKeyMaterial,
-  type MoneroNetworkType,
 } from './moneroWallet';
 import { decryptSeed, encryptSeed } from './seedVault';
+import {
+  combinedContextStorageKey,
+  listCombinedContextBindings,
+  loadCombinedContext,
+  saveCombinedContext,
+  type CombinedAddressBinding,
+  type CombinedAddressContext,
+} from './combinedAddressContext';
+
+async function verifyCombinedContextOwner(context: CombinedAddressContext, secret: string): Promise<void> {
+  const networkType = context.network === 'testnet' ? MoneroNetworkType.TESTNET
+    : context.network === 'stagenet' ? MoneroNetworkType.STAGENET : MoneroNetworkType.MAINNET;
+  const material = await unlockMoneroWallet(secret, networkType, context.walletId);
+  if (!material) throw new Error('The original Monero wallet is required for this saved context.');
+  const combined = computeCombinedAddressWithPrivateAndPublic(material.privateSpendKey, material.privateViewKey,
+    context.counterpartyPrivateViewKey, context.counterpartyPublicSpendKey, networkType);
+  if (combined.combinedAddress !== context.combinedAddress) {
+    throw new Error('Saved combined address does not match its owner wallet and counterparty keys.');
+  }
+}
+
+export async function saveMoneroCombinedContext(context: CombinedAddressContext, secret: string): Promise<void> {
+  await verifyCombinedContextOwner(context, secret);
+  await navigator.locks.request(combinedContextStorageKey(context), () =>
+    saveCombinedContext(browser.storage.local, context, secret));
+}
+
+export async function loadMoneroCombinedContext(binding: CombinedAddressBinding, secret: string): Promise<CombinedAddressContext | null> {
+  const context = await loadCombinedContext(browser.storage.local, binding, secret);
+  if (context) await verifyCombinedContextOwner(context, secret);
+  return context;
+}
+
+export async function listMoneroCombinedContexts(walletId: number, network: CombinedAddressBinding['network'], secret: string): Promise<CombinedAddressContext[]> {
+  await unlockWallet(secret);
+  const bindings = (await listCombinedContextBindings(browser.storage.local))
+    .filter((binding) => binding.walletId === walletId && binding.network === network);
+  const contexts: CombinedAddressContext[] = [];
+  for (const binding of bindings) {
+    const context = await loadMoneroCombinedContext(binding, secret);
+    if (context) contexts.push(context);
+  }
+  return contexts;
+}
 
 export interface MoneroWalletSummary {
   id: number;
@@ -52,13 +100,18 @@ export async function saveMoneroWallet(
 ): Promise<number> {
   await unlockWallet(lockSecret);
   const privateSpendKeyBytes = hexToBytes(material.privateSpendKey);
+  const privateViewKeyBytes = hexToBytes(material.privateViewKey);
 
   try {
     const vault = await encryptSeed(privateSpendKeyBytes, lockSecret);
+    const viewVault = await encryptSeed(privateViewKeyBytes, lockSecret);
     const activeMoneroKeyId = await addMoneroKeyRecord({
       encryptedPrivateSpendKey: vault.encryptedSeed,
       salt: vault.salt,
       iv: vault.iv,
+      encryptedPrivateViewKey: viewVault.encryptedSeed,
+      viewKeySalt: viewVault.salt,
+      viewKeyIv: viewVault.iv,
       address: material.address,
       createdAt: new Date().toISOString(),
       restoreHeight,
@@ -75,6 +128,7 @@ export async function saveMoneroWallet(
     return activeMoneroKeyId;
   } finally {
     privateSpendKeyBytes.fill(0);
+    privateViewKeyBytes.fill(0);
   }
 }
 
@@ -106,6 +160,17 @@ export async function unlockMoneroWallet(
       Array.from(decrypted, (byte) => byte.toString(16).padStart(2, '0')).join(''),
       networkType
     );
+    if (record.encryptedPrivateViewKey !== undefined) {
+      if (!record.viewKeySalt || !record.viewKeyIv) throw new Error('Incomplete encrypted Monero view key.');
+      const viewKey = await decryptSeed(record.encryptedPrivateViewKey, lockSecret, record.viewKeySalt, record.viewKeyIv);
+      try {
+        material.privateViewKey = Array.from(viewKey, (byte) => byte.toString(16).padStart(2, '0')).join('');
+        material.publicViewKey = getPublicKeyFromPrivateScalar(material.privateViewKey);
+        material.address = getCompleteAddressFromPrivate(material.privateSpendKey, material.privateViewKey, networkType);
+      } finally {
+        viewKey.fill(0);
+      }
+    }
     if (meta && meta.activeMoneroKeyId !== activeMoneroKeyId) {
       await setWalletMeta({
         ...meta,

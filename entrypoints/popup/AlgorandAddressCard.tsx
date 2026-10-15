@@ -8,7 +8,8 @@ import {
   type NetworkSettings,
 } from '../../lib/network/networks';
 import NetworkBadge from './NetworkBadge';
-import NetworkSettingsPanel from './NetworkSettings';
+import CopyValue from './CopyValue';
+import { ArrowLeft, ArrowRight, RefreshCw, Settings } from 'lucide-react';
 
 const POLL_INTERVAL_MS = 15000;
 
@@ -21,7 +22,7 @@ interface AlgorandAddressCardProps {
   derivationPath: string;
   settings: NetworkSettings;
   onChangeNetwork: (network: AlgorandNetworkId) => void;
-  onChangeSettings: (next: NetworkSettings) => void;
+  onOpenSettings: () => void;
   onPrev: () => void;
   onNext: () => void;
   isDeriving: boolean;
@@ -38,7 +39,7 @@ function AlgorandAddressCard({
   derivationPath,
   settings,
   onChangeNetwork,
-  onChangeSettings,
+  onOpenSettings,
   onPrev,
   onNext,
   isDeriving,
@@ -47,15 +48,13 @@ function AlgorandAddressCard({
   const color = networkColor(network);
   const algod = settings.algorand.algod;
 
-  const [showSettings, setShowSettings] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const copyTimerRef = useRef<number | null>(null);
 
   // Balances are cached per `network:address` so revisiting an address (prev/next
   // or switching networks and back) shows the last known amount instantly, and
   // the value only refreshes in the background instead of flickering.
   const cacheRef = useRef<Map<string, number>>(new Map());
   const currentKeyRef = useRef<string | null>(null);
+  const requestIdRef = useRef(0);
   const [displayed, setDisplayed] = useState<DisplayBalance>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -66,10 +65,10 @@ function AlgorandAddressCard({
       return;
     }
     const key = `${network}:${address}`;
+    const requestId = ++requestIdRef.current;
     setIsRefreshing(true);
-    const result = await getAlgoBalance(algod, address);
-    if (currentKeyRef.current !== key) {
-      // A newer address/network was selected before this resolved; discard it.
+    const result = await getAlgoBalance(algod, address, network);
+    if (currentKeyRef.current !== key || requestIdRef.current !== requestId) {
       return;
     }
     if (result.ok && result.algos !== undefined) {
@@ -94,32 +93,11 @@ function AlgorandAddressCard({
     setDisplayed(cached !== undefined ? { algos: cached } : null);
     fetchBalance();
     const timer = window.setInterval(fetchBalance, POLL_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [cacheKey, fetchBalance]);
-
-  useEffect(() => {
     return () => {
-      if (copyTimerRef.current !== null) {
-        window.clearTimeout(copyTimerRef.current);
-      }
+      window.clearInterval(timer);
+      requestIdRef.current += 1;
     };
-  }, []);
-
-  async function onCopyAddress() {
-    if (!address) {
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(address);
-      setCopied(true);
-      if (copyTimerRef.current !== null) {
-        window.clearTimeout(copyTimerRef.current);
-      }
-      copyTimerRef.current = window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard may be unavailable; ignore.
-    }
-  }
+  }, [cacheKey, fetchBalance]);
 
   return (
     <>
@@ -137,7 +115,7 @@ function AlgorandAddressCard({
               title="Previous address"
               aria-label="Previous address"
             >
-              ←
+              <ArrowLeft size={16} />
             </button>
             <span className="index-label">Address {addressIndex + 1}</span>
             <button
@@ -145,10 +123,10 @@ function AlgorandAddressCard({
               className="icon-btn"
               onClick={onNext}
               disabled={isDeriving}
-              title="Next address"
+              title="Next address (derive if new)"
               aria-label="Next address"
             >
-              →
+              <ArrowRight size={16} />
             </button>
           </div>
           <div className="address-frame-actions">
@@ -159,13 +137,12 @@ function AlgorandAddressCard({
             />
             <button
               type="button"
-              className={`icon-btn${showSettings ? ' icon-btn-active' : ''}`}
-              onClick={() => setShowSettings((current) => !current)}
+              className="icon-btn"
+              onClick={onOpenSettings}
               title="Network settings"
               aria-label="Network settings"
-              aria-expanded={showSettings}
             >
-              ⚙
+              <Settings size={16} />
             </button>
           </div>
         </div>
@@ -174,16 +151,7 @@ function AlgorandAddressCard({
           <p className="address" title={address ?? ''}>
             {addressPreview}
           </p>
-          <button
-            type="button"
-            className="icon-btn"
-            onClick={onCopyAddress}
-            disabled={!address}
-            title={copied ? 'Copied' : 'Copy address'}
-            aria-label="Copy address"
-          >
-            {copied ? '✓' : '⧉'}
-          </button>
+          <CopyValue value={address ?? ''} label="address" />
         </div>
 
         <div className="balance-row">
@@ -206,19 +174,15 @@ function AlgorandAddressCard({
             title="Refresh balance"
             aria-label="Refresh balance"
           >
-            {isRefreshing ? '…' : '⟳'}
+            <RefreshCw size={16} className={isRefreshing ? 'is-spinning' : ''} />
           </button>
         </div>
         {displayed && 'error' in displayed ? (
           <p className="probe-error">{displayed.error}</p>
         ) : null}
 
-        <p className="hint">Derivation path: {derivationPath}</p>
+        <details className="address-details"><summary>Address details</summary><p className="hint">Derivation path: {derivationPath}</p></details>
       </div>
-
-      {showSettings ? (
-        <NetworkSettingsPanel chain="algorand" settings={settings} onChange={onChangeSettings} />
-      ) : null}
     </>
   );
 }

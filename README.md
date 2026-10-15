@@ -1,6 +1,45 @@
 # ZebGen Wallet
 
-Zebgen wallet is an Algorand wallet created by HMD2V.
+Zebgen is an Algorand and Monero wallet created by HMD2V, currently focused on LeakSwap.
+
+## Wallet navigation
+
+Both chains have Overview, LeakSwap, and Settings sections. Overview contains
+Send and Receive; LeakSwap opens the swap app and, for Monero, contains the
+view-key sharing, address-combining, and combined-wallet recovery tools.
+Private spend keys and recovery phrases are hidden from the overview. Monero
+recovery details require reauthentication and are hidden when changing wallets.
+
+Receive QR codes contain only public payment URIs: `monero:<address>` for
+Monero and ARC-90 `algorand://<address>` for Algorand MainNet. Other Algorand
+networks use `algorand://net:<network>/<address>`; scanners must support that
+network selector, and a private LocalNet alias may not be recognized by other
+wallets. The address copy button always copies the raw address. No secrets are
+encoded in receiving QR codes.
+
+Algorand balances refresh on account changes and every 15 seconds; superseded
+requests cannot overwrite a newer result. Monero balances are scanned explicitly
+from the chosen restore height. Send review shows the prepared amount, fee, and
+total debit; confirmation submits the retained signed transaction.
+
+### Selected Chain And Endpoint
+
+The network selection identifies the intended chain, not the endpoint's location.
+A localhost node can serve public Mainnet, Testnet, or Stagenet. Monero's simulated
+chain has a separate **Local Regtest** selection, despite using mainnet address
+encoding. It is never labeled Mainnet in the wallet's regtest views.
+
+Monero connection tests, scans, preparation, and broadcast verify the daemon's
+reported network; mismatches fail before the operation. Algorand connection tests,
+balances, and preparation check the reported genesis ID; broadcast also compares
+the genesis ID and hash with the prepared transaction. Local simulated chains
+require loopback endpoints. These checks detect configuration errors, not dishonest
+nodes impersonating a chain. Offline Receive displays the selected chain, not a
+claim of a verified live connection.
+
+Monero verification, separate relay, and view-only funding APIs are provided by
+the exact published dependency `zebgen-monero-wasm@0.3.0`. No sibling WASM checkout
+is required to install or build the extension.
 
 ## Installing a release build (testers)
 
@@ -19,8 +58,19 @@ with a Chrome and a Firefox zip attached. To try a build:
    unzipped folder.
 
 This extension is not published on the Chrome Web Store or Firefox AMO — it's
-distributed this way for testers only. It currently only activates on
-`localhost`/`127.0.0.1` pages.
+distributed this way for testers only. Release builds expose `window.zebgen`
+only on `https://app.leakswap.com/*`. The LeakSwap homepage is hosted separately
+at `https://leakswap.com`; `https://zebgen.com` is reserved for the extension's
+landing/download page. DNS and hosting must be configured separately.
+
+### Local development and browser tests
+
+`npm run dev` enables provider access on `http://localhost/*` and
+`http://127.0.0.1/*`, in addition to the production swap domain. For local
+browser tests, run `npm run build:e2e`; the test helpers load
+`.output/chrome-mv3-e2e`. Normal `npm run build` release builds exclude local
+pages. This restriction applies to dApp provider injection, not to the local
+RPC nodes configured in Network Settings.
 
 ## Monero: why zebgen-monero-wasm instead of monero-ts
 

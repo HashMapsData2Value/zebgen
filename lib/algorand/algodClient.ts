@@ -1,6 +1,8 @@
 import algosdk from 'algosdk';
 
 import type { AlgodEndpoint, IndexerEndpoint } from '../network/networks';
+import type { AlgorandNetworkId } from '../network/networks';
+import { verifyAlgorandGenesis } from '../network/chainIdentity';
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -18,12 +20,17 @@ export interface AlgodProbeResult {
   ok: boolean;
   lastRound?: number;
   error?: string;
+  network?: string;
+  genesisId?: string;
 }
 
-export async function probeAlgod(endpoint: AlgodEndpoint): Promise<AlgodProbeResult> {
+export async function probeAlgod(endpoint: AlgodEndpoint, network?: AlgorandNetworkId): Promise<AlgodProbeResult> {
   try {
-    const status = await createAlgodClient(endpoint).status().do();
-    return { ok: true, lastRound: Number(status.lastRound) };
+    const client = createAlgodClient(endpoint);
+    const params = await client.getTransactionParams().do();
+    if (network) verifyAlgorandGenesis(network, params.genesisID ?? '', endpoint.server);
+    const status = await client.status().do();
+    return { ok: true, lastRound: Number(status.lastRound), network, genesisId: params.genesisID };
   } catch (err) {
     return { ok: false, error: errorMessage(err) };
   }
@@ -53,9 +60,14 @@ export interface BalanceResult {
 
 export async function getAlgoBalance(
   endpoint: AlgodEndpoint,
-  address: string
+  address: string,
+  network?: AlgorandNetworkId
 ): Promise<BalanceResult> {
   try {
+    if (network) {
+      const params = await createAlgodClient(endpoint).getTransactionParams().do();
+      verifyAlgorandGenesis(network, params.genesisID ?? '', endpoint.server);
+    }
     const info = await createAlgodClient(endpoint).accountInformation(address).do();
     return { ok: true, algos: Number(info.amount) / 1e6 };
   } catch (err) {

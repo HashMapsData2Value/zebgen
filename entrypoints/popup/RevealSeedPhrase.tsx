@@ -54,7 +54,7 @@ function RevealSeedPhrase() {
       }
       copyTimerRef.current = window.setTimeout(() => setCopied(false), 1500);
     } catch {
-      // Clipboard may be unavailable; ignore.
+      setError('Unable to copy the recovery phrase. Select the words to copy them manually.');
     }
   }
 
@@ -139,6 +139,7 @@ function RevealSeedPhrase() {
           Hide
         </button>
       </div>
+      {error ? <p className="error" role="alert">{error}</p> : null}
     </div>
   );
 }

@@ -17,6 +17,9 @@ export interface MoneroKeyRecord {
   encryptedPrivateSpendKey: ArrayBuffer;
   salt: Uint8Array;
   iv: Uint8Array;
+  encryptedPrivateViewKey?: ArrayBuffer;
+  viewKeySalt?: Uint8Array;
+  viewKeyIv?: Uint8Array;
   address: string;
   createdAt: string;
   // First block that can hold this wallet's funds; absent for imported wallets.

@@ -13,7 +13,8 @@ import {
 } from './db';
 import { constantTimeEqual, decryptSeed, deriveLockVerifier, encryptSeed } from './seedVault';
 import { createAlgodClient } from '../algorand/algodClient';
-import type { AlgodEndpoint } from '../network/networks';
+import type { AlgodEndpoint, AlgorandNetworkId } from '../network/networks';
+import { verifyAlgorandGenesis } from '../network/chainIdentity';
 
 export interface SignedInState {
   isSignedIn: boolean;
@@ -225,14 +226,15 @@ export async function deriveActiveSeedAlgoAddressAtIndex(
   }
 }
 
-export async function sendAlgoPayment(
+export async function prepareAlgoPayment(
   lockSecret: string,
   addressIndex: number,
   receiver: string,
   amountMicroAlgos: bigint,
   endpoint: AlgodEndpoint,
-  note?: string
-): Promise<{ txId: string; feeMicroAlgos: bigint }> {
+  note?: string,
+  network?: AlgorandNetworkId
+): Promise<{ txId: string; feeMicroAlgos: bigint; signed: Uint8Array; sender: string }> {
   if (!algosdk.isValidAddress(receiver)) {
     throw new Error('Enter a valid Algorand recipient address.');
   }
@@ -267,6 +269,7 @@ export async function sendAlgoPayment(
       const sender = new algosdk.Address(senderPublicKey).toString();
       const algod = createAlgodClient(endpoint);
       const suggestedParams = await algod.getTransactionParams().do();
+      if (network) verifyAlgorandGenesis(network, suggestedParams.genesisID ?? '', endpoint.server);
       const transaction = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
         sender,
         receiver,
@@ -282,14 +285,40 @@ export async function sendAlgoPayment(
         transaction.bytesToSign()
       );
       const signed = transaction.attachSignature(sender, signature);
-      const submitted = await algod.sendRawTransaction(signed).do();
-      return { txId: submitted.txid, feeMicroAlgos: transaction.fee };
+      return { txId: transaction.txID(), feeMicroAlgos: transaction.fee, signed, sender };
     } finally {
       rootKey.fill(0);
     }
   } finally {
     decryptedSeed.fill(0);
   }
+}
+
+export async function submitAlgoPayment(endpoint: AlgodEndpoint, signed: Uint8Array): Promise<string> {
+  const client = createAlgodClient(endpoint);
+  const params = await client.getTransactionParams().do();
+  const transaction = algosdk.decodeSignedTransaction(signed).txn;
+  if (transaction.genesisID !== params.genesisID ||
+    !transaction.genesisHash || !params.genesisHash ||
+    transaction.genesisHash.length !== params.genesisHash.length ||
+    transaction.genesisHash.some((byte, index) => byte !== params.genesisHash![index])) {
+    throw new Error('Algod chain changed since preparation. Review the transaction again.');
+  }
+  const submitted = await client.sendRawTransaction(signed).do();
+  return submitted.txid;
+}
+
+export async function sendAlgoPayment(
+  lockSecret: string,
+  addressIndex: number,
+  receiver: string,
+  amountMicroAlgos: bigint,
+  endpoint: AlgodEndpoint,
+  note?: string
+): Promise<{ txId: string; feeMicroAlgos: bigint }> {
+  const prepared = await prepareAlgoPayment(lockSecret, addressIndex, receiver, amountMicroAlgos, endpoint, note);
+  const txId = await submitAlgoPayment(endpoint, prepared.signed);
+  return { txId, feeMicroAlgos: prepared.feeMicroAlgos };
 }
 
 // Generic Algorand transaction signing primitive: decodes each unsigned

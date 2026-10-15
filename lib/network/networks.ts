@@ -5,7 +5,7 @@ import { MoneroNetworkType } from '../wallet/moneroWallet';
 // without bloating a bundle or breaking the MV3 popup.
 
 export type AlgorandNetworkId = 'mainnet' | 'testnet' | 'localnet';
-export type MoneroNetworkId = 'mainnet' | 'testnet' | 'stagenet';
+export type MoneroNetworkId = 'mainnet' | 'testnet' | 'stagenet' | 'regtest';
 
 export interface AlgodEndpoint {
   server: string;
@@ -47,7 +47,7 @@ export interface NetworkSettings {
 const ALGO_LOCALNET_TOKEN = 'a'.repeat(64);
 
 export const ALGORAND_NETWORK_IDS: AlgorandNetworkId[] = ['mainnet', 'testnet', 'localnet'];
-export const MONERO_NETWORK_IDS: MoneroNetworkId[] = ['mainnet', 'testnet', 'stagenet'];
+export const MONERO_NETWORK_IDS: MoneroNetworkId[] = ['mainnet', 'testnet', 'stagenet', 'regtest'];
 
 // Per-network accent colors used for the network badge and address framing.
 export const NETWORK_COLORS: Record<string, string> = {
@@ -55,6 +55,7 @@ export const NETWORK_COLORS: Record<string, string> = {
   testnet: '#ef4444', // red
   localnet: '#eab308', // yellow
   stagenet: '#22c55e', // green
+  regtest: '#eab308',
 };
 
 export function networkColor(network: string): string {
@@ -62,6 +63,7 @@ export function networkColor(network: string): string {
 }
 
 export function networkLabel(network: string): string {
+  if (network === 'regtest') return 'Local Regtest';
   return network.charAt(0).toUpperCase() + network.slice(1);
 }
 
@@ -83,10 +85,14 @@ export const ALGORAND_PRESETS: Record<AlgorandNetworkId, AlgorandNetworkConfig> 
   },
 };
 
-// Monero has no separate "localnet"; a local node simply runs one of the three
-// networks. Default daemon URIs point at the standard local RPC ports so a
-// locally running daemon works out of the box.
+// Endpoint location does not identify its chain. Regtest uses mainnet address
+// encoding but is a separate simulated chain, verified through daemon RPC.
 export const MONERO_PRESETS: Record<MoneroNetworkId, MoneroNetworkConfig> = {
+  regtest: {
+    network: 'regtest',
+    networkType: MoneroNetworkType.MAINNET,
+    daemon: { uri: 'http://127.0.0.1:18081' },
+  },
   mainnet: {
     network: 'mainnet',
     networkType: MoneroNetworkType.MAINNET,

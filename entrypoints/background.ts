@@ -1,8 +1,9 @@
 import { browser } from 'wxt/browser';
 
-import { createMoneroTransaction, probeMoneroDaemon } from '../lib/monero/moneroDaemon';
+import { probeMoneroDaemon, scanMoneroBalance } from '../lib/monero/moneroDaemon';
 import type { BackgroundMessage } from '../lib/network/messages';
 import { approveOrigin, isOriginApproved } from '../lib/provider/originApproval';
+import { validateProviderRequest } from '../lib/provider/fundingValidation';
 import type {
   PendingRequestMessage,
   PendingZebgenRequest,
@@ -11,6 +12,7 @@ import type {
 } from '../lib/provider/types';
 import { getSignedInState } from '../lib/wallet/algoWallet';
 import { getMoneroWalletState } from '../lib/wallet/moneroVault';
+import { discardPreparedTransactions, prepareTransaction, submitPreparedTransaction } from '../lib/wallet/transactionService';
 
 // Request types answerable straight from cached wallet-meta (public
 // addresses only) once the origin has already been approved once.
@@ -23,28 +25,47 @@ const pendingRequests = new Map<string, PendingZebgenRequest>();
 const pendingResolvers = new Map<string, (response: ZebgenBackgroundResponse) => void>();
 
 export default defineBackground(() => {
-  browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    const internalSender = sender.id === browser.runtime.id && Boolean(sender.url?.startsWith(browser.runtime.getURL('/')));
     if (isProviderRequest(message)) {
       handleProviderRequest(message).then(sendResponse);
       return true;
     }
     if (isPendingRequestMessage(message)) {
+      if (!internalSender) return false;
       handlePendingRequestMessage(message).then(sendResponse);
       return true;
     }
 
     const backgroundMessage = message as BackgroundMessage;
+    if (!internalSender) {
+      return false;
+    }
+    const owner = `${sender.documentId ?? sender.tab?.id ?? 'popup'}:${sender.url}`;
+    if (backgroundMessage?.type === 'wallet:prepareTransaction') {
+      prepareTransaction(owner, backgroundMessage.request).then(sendResponse).catch((error) => sendResponse(errorResponse(error)));
+      return true;
+    }
+    if (backgroundMessage?.type === 'wallet:submitTransaction') {
+      submitPreparedTransaction(owner, backgroundMessage.id).then(sendResponse).catch((error) => sendResponse(errorResponse(error)));
+      return true;
+    }
+    if (backgroundMessage?.type === 'wallet:discardTransactions') {
+      discardPreparedTransactions(owner);
+      sendResponse({ ok: true });
+      return false;
+    }
+    if (backgroundMessage?.type === 'monero:scanBalance') {
+      scanMoneroBalance(backgroundMessage.request)
+        .then(sendResponse)
+        .catch((error) => sendResponse(errorResponse(error)));
+      return true;
+    }
     if (backgroundMessage?.type === 'monero:probeDaemon') {
       probeMoneroDaemon(backgroundMessage.config)
         .then(sendResponse)
         .catch((err) => sendResponse(errorResponse(err)));
       // Keep the message channel open for the async response.
-      return true;
-    }
-    if (backgroundMessage?.type === 'monero:createTransaction') {
-      createMoneroTransaction(backgroundMessage.request)
-        .then(sendResponse)
-        .catch((err) => sendResponse(errorResponse(err)));
       return true;
     }
     return false;
@@ -64,6 +85,11 @@ function errorResponse(err: unknown) {
 }
 
 async function handleProviderRequest(request: ZebgenBackgroundRequest): Promise<ZebgenBackgroundResponse> {
+  try {
+    validateProviderRequest(request.type, request.params);
+  } catch (error) {
+    return errorResponse(error);
+  }
   const approved = await isOriginApproved(request.origin);
 
   if (approved && FAST_PATH_TYPES.has(request.type)) {

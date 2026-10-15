@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-
 import type { MoneroKeyMaterial } from '../../lib/wallet/moneroWallet';
+import CopyValue from './CopyValue';
 
 interface KeyRow {
   label: string;
@@ -10,6 +9,7 @@ interface KeyRow {
 
 interface MoneroKeyListProps {
   material: MoneroKeyMaterial;
+  includeSecrets?: boolean;
 }
 
 function truncateMiddle(value: string, lead = 10, tail = 8): string {
@@ -19,31 +19,7 @@ function truncateMiddle(value: string, lead = 10, tail = 8): string {
   return `${value.slice(0, lead)}…${value.slice(-tail)}`;
 }
 
-function MoneroKeyList({ material }: MoneroKeyListProps) {
-  const [copiedLabel, setCopiedLabel] = useState<string | null>(null);
-  const copyTimerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (copyTimerRef.current !== null) {
-        window.clearTimeout(copyTimerRef.current);
-      }
-    };
-  }, []);
-
-  async function onCopy(label: string, value: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopiedLabel(label);
-      if (copyTimerRef.current !== null) {
-        window.clearTimeout(copyTimerRef.current);
-      }
-      copyTimerRef.current = window.setTimeout(() => setCopiedLabel(null), 1500);
-    } catch {
-      // Clipboard may be unavailable; ignore.
-    }
-  }
-
+function MoneroKeyList({ material, includeSecrets = false }: MoneroKeyListProps) {
   const rows: KeyRow[] = [
     { label: 'Address', value: material.address },
     { label: 'Private spend key', value: material.privateSpendKey, secret: true },
@@ -54,7 +30,7 @@ function MoneroKeyList({ material }: MoneroKeyListProps) {
 
   return (
     <div className="mono-key-list">
-      {rows.map((row) => (
+      {rows.filter((row) => includeSecrets || !row.secret).map((row) => (
         <div key={row.label} className={`mono-key-row${row.secret ? ' mono-key-secret' : ''}`}>
           <span className="mono-key-label">
             {row.label}
@@ -63,14 +39,7 @@ function MoneroKeyList({ material }: MoneroKeyListProps) {
           <code className="mono-key-value" title={row.value}>
             {truncateMiddle(row.value)}
           </code>
-          <button
-            type="button"
-            className="icon-btn"
-            onClick={() => onCopy(row.label, row.value)}
-            title={`Copy ${row.label.toLowerCase()}`}
-          >
-            {copiedLabel === row.label ? '✓' : '⧉'}
-          </button>
+          <CopyValue value={row.value} label={row.label.toLowerCase()} />
         </div>
       ))}
     </div>

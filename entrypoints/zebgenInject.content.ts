@@ -1,11 +1,13 @@
+import { PROVIDER_PAGE_MATCHES } from '../lib/provider/pageMatches';
 import type { ZebgenPageRequest, ZebgenPageResponse, ZebgenRequestType } from '../lib/provider/types';
+import type { ZebgenScanCombinedMoneroFundingParams, ZebgenScanCombinedMoneroFundingResult } from '../lib/provider/types';
 
 // Runs in the page's own MAIN world (native MV3 `world: "MAIN"` injection, so
 // it isn't subject to the page's script-src CSP) and exposes `window.zebgen`.
 // All calls are relayed through `window.postMessage` to the isolated-world
 // `content` script, which forwards them to the background script.
 export default defineContentScript({
-  matches: ['http://localhost/*', 'http://127.0.0.1/*'],
+  matches: PROVIDER_PAGE_MATCHES,
   world: 'MAIN',
   main() {
     if (window.zebgen) {
@@ -49,6 +51,7 @@ export default defineContentScript({
       getAlgorandAddress: (params) => request('getAlgorandAddress', params ?? {}),
       getMoneroShareInfo: (params) => request('getMoneroShareInfo', params ?? {}),
       computeCombinedMoneroAddress: (params) => request('computeCombinedMoneroAddress', params),
+      scanCombinedMoneroFunding: (params) => request('scanCombinedMoneroFunding', params),
       signAlgorandTransactions: (params) => request('signAlgorandTransactions', params),
       computeMoneroLeakySignature: (params) => request('computeMoneroLeakySignature', params),
     };
@@ -65,6 +68,7 @@ export default defineContentScript({
 
 interface ZebgenProvider {
   isZebgen: true;
+  scanCombinedMoneroFunding: (params: ZebgenScanCombinedMoneroFundingParams) => Promise<ZebgenScanCombinedMoneroFundingResult>;
   connect: () => Promise<{ algoAddress: string | null; moneroAddress: string | null }>;
   getAlgorandAddress: (params?: {
     addressIndex?: number;

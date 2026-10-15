@@ -1,7 +1,7 @@
 .popup-root {
   position: relative;
   overflow: visible;
-  width: 340px;
+  width: min(360px, 100%);
   padding: 0.5rem 0.55rem 0.7rem;
 }
 
@@ -10,6 +10,52 @@
   margin: 0 auto;
   padding: 1.5rem 1.75rem 2.5rem;
 }
+
+.header-actions { display: flex; align-items: center; gap: 0.4rem; }
+.chain-tabs, .section-tabs { display: flex; gap: 0.3rem; margin-bottom: 0.8rem; }
+.chain-tabs button, .section-tabs button {
+  flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center;
+  gap: 0.45rem; padding: 0.6rem 0.35rem; border-radius: 6px;
+  background: transparent; color: #d7deef; border: 1px solid rgba(129, 103, 218, 0.3);
+  font: inherit; font-size: 0.85rem;
+}
+.chain-tabs button[aria-pressed="true"], .section-tabs button[aria-pressed="true"] {
+  background: #252038; border-color: #a6a0ba; color: #fff;
+}
+.chain-tabs img { width: 20px; height: 20px; object-fit: contain; }
+.section-tabs { border-bottom: 1px solid #373141; padding-bottom: 0.6rem; }
+.account-selector { display: flex; align-items: center; gap: 0.6rem; margin: 0 0 0.8rem; }
+.account-selector label { font-size: 0.8rem; color: #c9bfd6; }
+.account-selector select {
+  flex: 1; min-width: 0; max-width: 100%; background: #14111d; color: #f6f0ff;
+  border: 1px solid #544b65; border-radius: 6px; padding: 0.55rem; font: inherit; font-size: 0.8rem;
+}
+.primary-actions { grid-template-columns: 1fr 1fr !important; margin-top: 0.7rem; }
+.primary-actions button { display: flex; align-items: center; justify-content: center; gap: 0.4rem; }
+.copy-control { display: inline-flex; position: relative; flex: 0 0 32px; width: 32px; }
+.copy-control .icon-btn { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; }
+.copy-feedback:not(:empty) {
+  position: absolute; bottom: calc(100% + 4px); right: 0; z-index: 5;
+  white-space: nowrap; background: #f4f1f8; color: #17111f; border-radius: 4px;
+  padding: 0.25rem 0.4rem; font-size: 0.75rem;
+}
+.mono-key-row > .copy-control { grid-column: 3; grid-row: 2; }
+.mono-key-value { min-width: 0; }
+.receive-view { text-align: center; }
+.receive-network { text-transform: capitalize; font-size: 0.85rem; color: #c9bfd6; }
+.receive-qr { margin: 1rem auto; width: 196px; background: #fff; padding: 8px; border-radius: 6px; }
+.receive-qr svg { display: block; width: 180px; height: 180px; }
+.receive-address { display: flex; align-items: center; gap: 0.5rem; padding: 0.65rem 0; text-align: left; }
+.receive-address code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 0.8rem; user-select: all; }
+.app-link { display: flex; align-items: center; justify-content: space-between; color: #e4f4d9; padding: 0.7rem 0; border-bottom: 1px solid #50445d; }
+.privacy-notice { color: #e5d4a9; font-size: 0.8rem; }
+.recovery-view { margin-top: 1.25rem; border-top: 1px solid #50445d; padding-top: 1rem; }
+.address-details { margin-top: 0.75rem; font-size: 0.75rem; color: #c9bfd6; }
+.address-details summary { cursor: pointer; }
+.is-spinning { animation: walletSpin 1s linear infinite; }
+@keyframes walletSpin { to { transform: rotate(360deg); } }
+button:focus-visible, a:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid #e5d4a9; outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { .is-spinning { animation: none; } }
 
 .app-header {
   display: flex;
@@ -307,6 +353,9 @@ h2 {
   flex-direction: column;
   gap: 0.75rem;
 }
+
+.transaction-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.monero-balance { border-top: 1px solid #50445d; padding: 0.75rem 0; }
 
 .transaction-context {
   display: flex;

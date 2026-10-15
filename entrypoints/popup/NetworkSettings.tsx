@@ -9,6 +9,7 @@ import {
   cloneAlgorandPreset,
   cloneMoneroPreset,
   networkColor,
+  networkLabel,
   type AlgorandNetworkId,
   type MoneroNetworkId,
   type NetworkSettings,
@@ -66,10 +67,10 @@ function NetworkSettingsPanel({ chain, settings, onChange }: NetworkSettingsPane
       setAlgodProbe({ status: 'error', message: err instanceof Error ? err.message : String(err) });
       return;
     }
-    const result = await probeAlgod(settings.algorand.algod);
+    const result = await probeAlgod(settings.algorand.algod, settings.algorand.network);
     setAlgodProbe(
       result.ok
-        ? { status: 'ok', message: `Connected · last round ${result.lastRound}` }
+        ? { status: 'ok', message: `${networkLabel(result.network ?? '')} · ${result.genesisId} · last round ${result.lastRound}` }
         : { status: 'error', message: result.error ?? 'Connection failed.' }
     );
   }
@@ -97,7 +98,7 @@ function NetworkSettingsPanel({ chain, settings, onChange }: NetworkSettingsPane
       const result = await probeMoneroDaemonViaBackground(settings.monero);
       setDaemonProbe(
         result.ok
-          ? { status: 'ok', message: `Connected · height ${result.height}` }
+          ? { status: 'ok', message: `${networkLabel(result.network ?? '')} · height ${result.height}` }
           : { status: 'error', message: result.error ?? 'Connection failed.' }
       );
     } catch (err) {
@@ -215,11 +216,12 @@ function NetworkSettingsPanel({ chain, settings, onChange }: NetworkSettingsPane
             style={tabStyle(monero.network === id, id)}
             onClick={() => onSelectMoneroNetwork(id)}
           >
-            {id}
+            {networkLabel(id)}
           </button>
         ))}
       </div>
 
+      {monero.network === 'regtest' ? <p className="privacy-notice">Local simulated chain. Test coins only. Addresses use mainnet encoding.</p> : null}
       <p className="net-subheading">Daemon RPC</p>
       <p className="hint net-hint">
         Connect to your own local Monero node, or use the node provided with the wallet. Routing

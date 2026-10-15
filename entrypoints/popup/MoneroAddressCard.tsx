@@ -1,15 +1,14 @@
-import { useState } from 'react';
-
 import {
   MONERO_NETWORK_IDS,
   networkColor,
   type MoneroNetworkId,
   type NetworkSettings,
 } from '../../lib/network/networks';
-import { createSwapSharePayload, type MoneroKeyMaterial } from '../../lib/wallet/moneroWallet';
-import { privateKeyToMoneroMnemonic } from '../../lib/wallet/moneroMnemonic';
-import MoneroKeyList from './MoneroKeyList';
+import type { MoneroKeyMaterial } from '../../lib/wallet/moneroWallet';
+import CopyValue from './CopyValue';
+import { ArrowLeft, ArrowRight, Settings } from 'lucide-react';
 import NetworkBadge from './NetworkBadge';
+import MoneroBalance from './MoneroBalance';
 
 interface MoneroAddressCardProps {
   material: MoneroKeyMaterial;
@@ -20,6 +19,9 @@ interface MoneroAddressCardProps {
   addressCount: number;
   onPrev: () => void;
   onNext: () => void;
+  walletId: number;
+  lockSecret: string;
+  restoreHeight?: number;
 }
 
 function MoneroAddressCard({
@@ -31,12 +33,12 @@ function MoneroAddressCard({
   addressCount,
   onPrev,
   onNext,
+  walletId,
+  lockSecret,
+  restoreHeight,
 }: MoneroAddressCardProps) {
-  const [showMnemonic, setShowMnemonic] = useState(false);
   const network = settings.monero.network;
   const color = networkColor(network);
-  const share = createSwapSharePayload(material.privateSpendKey);
-  const mnemonic = privateKeyToMoneroMnemonic(material.privateSpendKey);
 
   return (
     <>
@@ -54,7 +56,7 @@ function MoneroAddressCard({
               title="Previous address"
               aria-label="Previous address"
             >
-              ←
+              <ArrowLeft size={16} />
             </button>
             <span className="index-label">{addressPosition + 1} of {addressCount}</span>
             <button
@@ -65,7 +67,7 @@ function MoneroAddressCard({
               title="Next address"
               aria-label="Next address"
             >
-              →
+              <ArrowRight size={16} />
             </button>
           </div>
           <div className="address-frame-actions">
@@ -81,53 +83,18 @@ function MoneroAddressCard({
               title="Network settings"
               aria-label="Network settings"
             >
-              ⚙
+              <Settings size={16} />
             </button>
           </div>
         </div>
 
-        <MoneroKeyList material={material} />
-
-        <div className="seed-reveal">
-          <button
-            type="button"
-            className={showMnemonic ? 'danger' : 'secondary'}
-            onClick={() => setShowMnemonic((current) => !current)}
-          >
-            {showMnemonic ? 'Hide Recovery Mnemonic' : 'Reveal Recovery Mnemonic'}
-          </button>
-          {showMnemonic ? (
-            <>
-              <div className="seed-warning">
-                <strong>Keep this phrase private</strong>
-                <p>Anyone with these 25 words has full control of this Monero address.</p>
-              </div>
-              <div className="seed-reveal-words">
-                {mnemonic.split(' ').map((word, index) => (
-                  <span className="seed-word" key={`${word}-${index}`}>
-                    <span className="seed-word-index">{index + 1}</span>
-                    {word}
-                  </span>
-                ))}
-              </div>
-            </>
-          ) : null}
+        <div className="address-row">
+          <p className="address" title={material.address}>{material.address.slice(0, 10)}...{material.address.slice(-8)}</p>
+          <CopyValue value={material.address} label="address" />
         </div>
-
-        <div className="mono-share">
-          <p className="net-subheading">Swap share payload</p>
-          <p className="hint">Send these values to the counterparty.</p>
-          <div className="mono-key-list">
-            <div className="mono-key-row">
-              <span className="mono-key-label">Private view key</span>
-              <code className="mono-key-value">{share.privateViewKey}</code>
-            </div>
-            <div className="mono-key-row">
-              <span className="mono-key-label">Public spend key</span>
-              <code className="mono-key-value">{share.publicSpendKey}</code>
-            </div>
-          </div>
-        </div>
+        <MoneroBalance key={`${material.address}-${settings.monero.daemon.uri}-${restoreHeight}`}
+          address={material.address} config={settings.monero} walletId={walletId}
+          lockSecret={lockSecret} restoreHeight={restoreHeight} />
       </div>
     </>
   );

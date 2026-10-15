@@ -1,9 +1,11 @@
 import algosdk from 'algosdk';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { browser } from 'wxt/browser';
 
-import { currentRestoreHeight, rememberSwapAddressHeight } from '../../lib/monero/restoreHeight';
+import { currentRestoreHeight, rememberSwapAddressHeight, swapAddressHeight } from '../../lib/monero/restoreHeight';
+import { scanMoneroFunding, type MoneroFundingControl } from '../../lib/monero/moneroDaemon';
+import { fundingRestoreHeight, validateFundingParams } from '../../lib/provider/fundingValidation';
 import { getNetworkSettings } from '../../lib/network/networkStore';
 import { base64ToBytes, bytesToBase64 } from '../../lib/provider/base64';
 import type { GetPendingRequestResponse, PendingZebgenRequest } from '../../lib/provider/types';
@@ -14,8 +16,8 @@ import {
   unlockWallet,
 } from '../../lib/wallet/algoWallet';
 import { leakySign } from '../../lib/wallet/leakySign';
-import { getMoneroWalletState, unlockMoneroWallet } from '../../lib/wallet/moneroVault';
-import { computeCombinedAddressWithPrivateAndPublic } from '../../lib/wallet/moneroWallet';
+import { getMoneroWalletState, loadMoneroCombinedContext, saveMoneroCombinedContext, unlockMoneroWallet } from '../../lib/wallet/moneroVault';
+import { combinePrivateSpendKeys, computeCombinedAddressWithPrivateAndPublic } from '../../lib/wallet/moneroWallet';
 
 interface ExternalRequestAppProps {
   requestId: string;
@@ -30,6 +32,17 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
   const [secret, setSecret] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
+  const scanController = useRef<AbortController | null>(null);
+  const [scanProgress, setScanProgress] = useState<{ scannedHeight: number; targetHeight: number } | null>(null);
+
+  useEffect(() => {
+    const cancel = () => scanController.current?.abort();
+    window.addEventListener('pagehide', cancel);
+    return () => {
+      cancel();
+      window.removeEventListener('pagehide', cancel);
+    };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -93,7 +106,10 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
     setError(null);
     try {
       await unlockWallet(secret);
-      const result = await computeResult(pending, secret);
+      const controller = new AbortController();
+      scanController.current = controller;
+      setScanProgress(null);
+      const result = await computeResult(pending, secret, { signal: controller.signal, onProgress: setScanProgress });
       await respond(true, result);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to complete request.');
@@ -102,6 +118,7 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
   }
 
   async function onReject() {
+    scanController.current?.abort();
     await respond(false, undefined, 'User rejected the request.');
   }
 
@@ -151,6 +168,14 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
           </p>
         ) : null}
 
+        {pending.type === 'scanCombinedMoneroFunding' ? (
+          <p className="hint">
+            View-only scan of combined-address received outputs. Spent status is unknown; these totals
+            cannot prove funds remain available. Private spend keys and the combined private view key
+            are not returned by this request.
+          </p>
+        ) : null}
+
         {stage === 'consent' ? (
           <div className="seed-reveal-actions">
             <button type="button" className="secondary" onClick={onReject} disabled={isBusy}>
@@ -173,8 +198,8 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
               required
             />
             <div className="seed-reveal-actions">
-              <button type="button" className="secondary" onClick={onReject} disabled={isBusy}>
-                Deny
+              <button type="button" className="secondary" onClick={onReject} disabled={isBusy && pending.type !== 'scanCombinedMoneroFunding'}>
+                {isBusy && pending.type === 'scanCombinedMoneroFunding' ? 'Cancel scan' : 'Deny'}
               </button>
               <button type="submit" disabled={isBusy || !secret}>
                 {isBusy ? 'Approving...' : 'Unlock and Approve'}
@@ -184,12 +209,13 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
         )}
 
         {error ? <p className="error">{error}</p> : null}
+        {isBusy && scanProgress ? <p role="status">Scanned height {scanProgress.scannedHeight} of {scanProgress.targetHeight}</p> : null}
       </section>
     </main>
   );
 }
 
-async function computeResult(pending: PendingZebgenRequest, secret: string): Promise<unknown> {
+async function computeResult(pending: PendingZebgenRequest, secret: string, control?: MoneroFundingControl): Promise<unknown> {
   const networkSettings = await getNetworkSettings();
 
   if (pending.type === 'getAlgorandAddress') {
@@ -217,7 +243,9 @@ async function computeResult(pending: PendingZebgenRequest, secret: string): Pro
       counterpartyPrivateViewKey: string;
       counterpartyPublicSpendKey: string;
     };
-    const material = await unlockMoneroWallet(secret, networkSettings.monero.networkType, params.moneroWalletId);
+    const walletId = params.moneroWalletId ?? (await getMoneroWalletState()).activeWalletId;
+    if (walletId === null) throw new Error('No Monero wallet found. Create one in the wallet first.');
+    const material = await unlockMoneroWallet(secret, networkSettings.monero.networkType, walletId);
     if (!material) {
       throw new Error('No Monero wallet found. Create one in the wallet first.');
     }
@@ -228,12 +256,50 @@ async function computeResult(pending: PendingZebgenRequest, secret: string): Pro
       params.counterpartyPublicSpendKey,
       networkSettings.monero.networkType
     );
-    // A new swap address can't hold funds from before now; recovery later scans from here.
-    const height = await currentRestoreHeight(networkSettings.monero);
-    if (height !== undefined) {
-      await rememberSwapAddressHeight(combined.combinedAddress, height);
-    }
+    const saved = await loadMoneroCombinedContext({ walletId, network: networkSettings.monero.network,
+      combinedAddress: combined.combinedAddress }, secret);
+    const height = saved?.restoreHeight ?? await currentRestoreHeight(networkSettings.monero);
+    const legacyHeight = await swapAddressHeight(combined.combinedAddress);
+    const restoreHeight = Math.min(height ?? 0, fundingRestoreHeight(undefined, legacyHeight ?? height));
+    await saveMoneroCombinedContext({
+      version: 1,
+      walletId,
+      network: networkSettings.monero.network,
+      combinedAddress: combined.combinedAddress,
+      counterpartyPublicSpendKey: params.counterpartyPublicSpendKey,
+      counterpartyPrivateViewKey: params.counterpartyPrivateViewKey,
+      restoreHeight,
+    }, secret);
+    await rememberSwapAddressHeight(combined.combinedAddress, restoreHeight);
     return combined;
+  }
+
+  if (pending.type === 'scanCombinedMoneroFunding') {
+    const params = pending.params;
+    validateFundingParams(params);
+    const walletId = params.moneroWalletId ?? (await getMoneroWalletState()).activeWalletId;
+    if (walletId === null) throw new Error('No Monero wallet found. Create one in the wallet first.');
+    const material = await unlockMoneroWallet(secret, networkSettings.monero.networkType, walletId);
+    if (!material) throw new Error('No Monero wallet found. Create one in the wallet first.');
+    const combined = computeCombinedAddressWithPrivateAndPublic(
+      material.privateSpendKey,
+      material.privateViewKey,
+      params.counterpartyPrivateViewKey,
+      params.counterpartyPublicSpendKey,
+      networkSettings.monero.networkType
+    );
+    const saved = await loadMoneroCombinedContext({ walletId, network: networkSettings.monero.network,
+      combinedAddress: combined.combinedAddress }, secret);
+    const restoreHeight = fundingRestoreHeight(params.restoreHeight,
+      saved?.restoreHeight ?? await swapAddressHeight(combined.combinedAddress));
+    const funding = await scanMoneroFunding(
+      networkSettings.monero,
+      combined.combinedPublicSpendKey,
+      combinePrivateSpendKeys(material.privateViewKey, params.counterpartyPrivateViewKey),
+      restoreHeight,
+      control
+    );
+    return { ...funding, combinedAddress: combined.combinedAddress };
   }
 
   if (pending.type === 'signAlgorandTransactions') {
@@ -294,6 +360,8 @@ function describeRequest(pending: PendingZebgenRequest): string {
       return 'Share Monero Key Material';
     case 'computeCombinedMoneroAddress':
       return 'Compute Combined Monero Address';
+    case 'scanCombinedMoneroFunding':
+      return 'Check Combined Monero Funding (View Only)';
     case 'signAlgorandTransactions':
       return 'Sign Algorand Transaction';
     case 'computeMoneroLeakySignature':

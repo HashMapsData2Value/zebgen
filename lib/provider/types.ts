@@ -8,6 +8,7 @@ export type ZebgenRequestType =
   | 'getAlgorandAddress'
   | 'getMoneroShareInfo'
   | 'computeCombinedMoneroAddress'
+  | 'scanCombinedMoneroFunding'
   | 'signAlgorandTransactions'
   | 'computeMoneroLeakySignature';
 
@@ -45,6 +46,19 @@ export interface ZebgenComputeCombinedMoneroAddressResult {
   combinedAddress: string;
   combinedPublicSpendKey: string;
   combinedPublicViewKey: string;
+}
+
+export interface ZebgenScanCombinedMoneroFundingParams extends ZebgenComputeCombinedMoneroAddressParams {
+  restoreHeight?: number;
+}
+
+export interface ZebgenScanCombinedMoneroFundingResult {
+  combinedAddress: string;
+  receivedAtomic: string;
+  matureAtomic: string;
+  lockedAtomic: string;
+  scannedHeight: number;
+  spentStatusKnown: false;
 }
 
 // Generic Algorand transaction signing primitive. `txns` is the *entire*
