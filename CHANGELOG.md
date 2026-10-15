@@ -1,3 +1,10 @@
+# [1.3.0](https://github.com/HashMapsData2Value/zebgen/compare/v1.2.0...v1.3.0) (2026-10-15)
+
+
+### Features
+
+* **wallet:** prepare transactions and preserve swap recovery context ([afd755a](https://github.com/HashMapsData2Value/zebgen/commit/afd755ab1a74fb879d60bbec902f1a01b4a3ea22))
+
 # [1.2.0](https://github.com/HashMapsData2Value/zebgen/compare/v1.1.0...v1.2.0) (2026-10-13)
 
 
