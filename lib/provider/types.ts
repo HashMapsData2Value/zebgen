@@ -9,12 +9,41 @@ export type ZebgenRequestType =
   | 'getMoneroShareInfo'
   | 'computeCombinedMoneroAddress'
   | 'scanCombinedMoneroFunding'
+  | 'saveLeakSwap'
+  | 'listLeakSwaps'
+  | 'createSwapInvite'
+  | 'acceptSwapInvite'
+  | 'confirmSwapAcceptance'
   | 'signAlgorandTransactions'
   | 'computeMoneroLeakySignature';
 
 export interface ZebgenConnectResult {
   algoAddress: string | null;
   moneroAddress: string | null;
+}
+
+export interface ZebgenSaveLeakSwapParams {
+  agreementDigest?: string;
+  appId: string;
+  combinedAddress: string;
+}
+
+export interface ZebgenSavedLeakSwap {
+  agreement?: import('../../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapAgreement').SwapAgreement;
+  appId: string;
+  appAddress: string;
+  genesisHash: string;
+  role: 'ali' | 'xin';
+  algoAddress: string;
+  counterpartyAlgoAddress: string;
+  t0: number;
+  t1: number;
+  restoreHeight: number;
+  counterpartyPublicSpendKey: string;
+  counterpartyPrivateViewKey: string;
+  shareInfo: ZebgenGetMoneroShareInfoResult;
+  combined: ZebgenComputeCombinedMoneroAddressResult;
+  signedTransactions: { txId: string; method: string | null }[];
 }
 
 export interface ZebgenGetAlgorandAddressParams {
@@ -68,6 +97,8 @@ export interface ZebgenScanCombinedMoneroFundingResult {
 // The page is responsible for submitting the signed group to the network -
 // zebgen only ever signs, it never broadcasts on the page's behalf.
 export interface ZebgenSignAlgorandTransactionsParams {
+  agreementDigest?: string;
+  agreementAppId?: string;
   addressIndex?: number;
   txns: string[];
   indexesToSign: number[];

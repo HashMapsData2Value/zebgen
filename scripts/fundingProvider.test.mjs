@@ -47,3 +47,27 @@ test('provider gate recognizes existing operations and rejects unknown requests'
   }
   assert.throws(() => validateProviderRequest('scanFunding', params), /Unsupported/);
 });
+
+test('swap persistence provider rejects malformed identities before approval', () => {
+  assert.doesNotThrow(() => validateProviderRequest('listLeakSwaps', {}));
+  assert.doesNotThrow(() => validateProviderRequest('saveLeakSwap', { appId: '123', combinedAddress: '4'.repeat(95) }));
+  for (const appId of [undefined, 123, '', '0', '-1', '1.5', '18446744073709551616']) {
+    assert.throws(() => validateProviderRequest('saveLeakSwap', { appId, combinedAddress: '4'.repeat(95) }), /identity/);
+  }
+  assert.throws(() => validateProviderRequest('saveLeakSwap', { appId: '123', combinedAddress: 'invalid' }), /identity/);
+});
+
+test('handshake provider accepts only structured terms and link-only responses', () => {
+  const terms = { algoAmount: '10000000', xmrAmount: '1000000000000', t0: 200, t1: 300 };
+  assert.doesNotThrow(() => validateProviderRequest('createSwapInvite', terms));
+  for (const input of [null, 'TX', [], { ...terms, bytes: 'TX' }, { ...terms, domain: 'MX' },
+    { ...terms, t0: -1 }, { ...terms, t1: Number.MAX_SAFE_INTEGER }, { ...terms, algoAmount: '1e7' }]) {
+    assert.throws(() => validateProviderRequest('createSwapInvite', input));
+  }
+  for (const type of ['acceptSwapInvite', 'confirmSwapAcceptance']) {
+    assert.doesNotThrow(() => validateProviderRequest(type, { link: 'https://app.leakswap.com/swap#invite=example' }));
+    for (const input of [null, {}, { link: 'url', bytes: 'TX' }, { link: 'x'.repeat(12513) }]) {
+      assert.throws(() => validateProviderRequest(type, input));
+    }
+  }
+});
