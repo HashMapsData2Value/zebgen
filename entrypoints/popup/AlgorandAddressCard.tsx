@@ -9,9 +9,9 @@ import {
 } from '../../lib/network/networks';
 import NetworkBadge from './NetworkBadge';
 import CopyValue from './CopyValue';
-import { ArrowLeft, ArrowRight, RefreshCw, Settings } from 'lucide-react';
+import { RefreshCw, Settings } from 'lucide-react';
 
-const POLL_INTERVAL_MS = 15000;
+const POLL_INTERVAL_MS = 5000;
 
 type DisplayBalance = { algos: number } | { error: string } | null;
 
@@ -23,9 +23,6 @@ interface AlgorandAddressCardProps {
   settings: NetworkSettings;
   onChangeNetwork: (network: AlgorandNetworkId) => void;
   onOpenSettings: () => void;
-  onPrev: () => void;
-  onNext: () => void;
-  isDeriving: boolean;
 }
 
 function formatAlgos(algos: number): string {
@@ -40,9 +37,6 @@ function AlgorandAddressCard({
   settings,
   onChangeNetwork,
   onOpenSettings,
-  onPrev,
-  onNext,
-  isDeriving,
 }: AlgorandAddressCardProps) {
   const network = settings.algorand.network;
   const color = networkColor(network);
@@ -107,27 +101,7 @@ function AlgorandAddressCard({
       >
         <div className="address-frame-header">
           <div className="address-nav" aria-label="Algorand address navigation">
-            <button
-              type="button"
-              className="icon-btn"
-              onClick={onPrev}
-              disabled={isDeriving || addressIndex === 0}
-              title="Previous address"
-              aria-label="Previous address"
-            >
-              <ArrowLeft size={16} />
-            </button>
             <span className="index-label">Address {addressIndex + 1}</span>
-            <button
-              type="button"
-              className="icon-btn"
-              onClick={onNext}
-              disabled={isDeriving}
-              title="Next address (derive if new)"
-              aria-label="Next address"
-            >
-              <ArrowRight size={16} />
-            </button>
           </div>
           <div className="address-frame-actions">
             <NetworkBadge

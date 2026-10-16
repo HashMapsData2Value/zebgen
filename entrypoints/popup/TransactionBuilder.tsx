@@ -1,14 +1,19 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 
-import { discardTransactionsViaBackground, prepareTransactionViaBackground, submitTransactionViaBackground } from '../../lib/network/messages';
+import { discardTransactionsViaBackground, prepareTransactionViaBackground, submitTransactionViaBackground, scanMoneroBalanceViaBackground, transactionStatusViaBackground } from '../../lib/network/messages';
+import ScanActivity from './ScanActivity';
+import type { TransactionStatus } from '../../lib/wallet/transactionStatus';
+import { getAlgoBalance } from '../../lib/algorand/algodClient';
+import { RefreshCw } from 'lucide-react';
 import { ensureHostPermissions } from '../../lib/network/hostPermissions';
 import type { AlgodEndpoint, AlgorandNetworkId, MoneroNetworkConfig } from '../../lib/network/networks';
 import { networkLabel } from '../../lib/network/networks';
 import type { TransactionReview } from '../../lib/wallet/transactionService';
 import { formatAtomic } from '../../lib/wallet/formatAtomic';
 import CopyValue from './CopyValue';
+import { addressValidationError } from '../../lib/wallet/addressValidation';
 
-function parseUnits(value: string, decimals: number): bigint {
+function parseUnits(value: string, decimals: number, allowZero = false): bigint {
   const normalized = value.trim();
   if (!/^\d+(\.\d+)?$/.test(normalized)) {
     throw new Error('Enter a valid positive amount.');
@@ -18,7 +23,7 @@ function parseUnits(value: string, decimals: number): bigint {
     throw new Error(`Amount supports at most ${decimals} decimal places.`);
   }
   const units = BigInt(whole) * 10n ** BigInt(decimals) + BigInt(fraction.padEnd(decimals, '0'));
-  if (units <= 0n) {
+  if (units === 0n && !allowZero) {
     throw new Error('Amount must be greater than zero.');
   }
   return units;
@@ -58,23 +63,135 @@ function TransactionBuilder(props: TransactionBuilderProps) {
   const [result, setResult] = useState<string | null>(null);
   const [transactionId, setTransactionId] = useState('');
   const [prepared, setPrepared] = useState<TransactionReview | null>(null);
+  const [balance, setBalance] = useState<{ key: string; atomic: string } | null>(null);
+  const [balanceBusy, setBalanceBusy] = useState(false);
+  const [balanceError, setBalanceError] = useState<string | null>(null);
+  const [approvalSecret, setApprovalSecret] = useState('');
+  const [receiptStatus, setReceiptStatus] = useState<TransactionStatus | null>(null);
+  const [receiptError, setReceiptError] = useState<string | null>(null);
+  const [receiptRefresh, setReceiptRefresh] = useState(0);
+  const balanceGeneration = useRef(0);
+  const balanceController = useRef<AbortController | null>(null);
+  const balanceKey = JSON.stringify(props.chain === 'algorand'
+    ? [props.chain, props.sender, props.network, props.endpoint]
+    : [props.chain, props.sender, props.walletId, props.config, restoreHeight]);
+
+  useEffect(() => {
+    balanceController.current?.abort();
+    let active = true;
+    balanceGeneration.current += 1;
+    setBalance(null);
+    setBalanceError(null);
+    setBalanceBusy(false);
+    if (props.chain !== 'algorand') return () => { balanceGeneration.current += 1; balanceController.current?.abort(); };
+    async function refresh() {
+      if (props.chain !== 'algorand') return;
+      const result = await getAlgoBalance(props.endpoint, props.sender, props.network);
+      if (!active) return;
+      if (result.ok && result.spendableAtomic !== undefined) {
+        setBalance({ key: balanceKey, atomic: result.spendableAtomic });
+        setBalanceError(null);
+      } else {
+        setBalance(null);
+        setBalanceError(result.error ?? 'Balance unavailable.');
+        console.error('Send balance lookup failed', result.error);
+      }
+    }
+    void refresh();
+    const timer = window.setInterval(refresh, 5000);
+    return () => { active = false; balanceGeneration.current += 1; window.clearInterval(timer); };
+  }, [balanceKey]);
 
   useEffect(() => () => {
     discardTransactionsViaBackground().catch((failure) => console.error('Unable to discard prepared transaction', failure));
   }, []);
+
+  useEffect(() => {
+    if (!transactionId) return;
+    let active = true;
+    let busy = false;
+    async function check() {
+      if (busy) return;
+      busy = true;
+      try {
+        const response = await transactionStatusViaBackground(props.chain === 'algorand'
+          ? { chain: 'algorand', endpoint: props.endpoint, hash: transactionId }
+          : { chain: 'monero', config: props.config, hash: transactionId });
+        if (!response.ok) throw new Error(response.error);
+        if (active) { setReceiptStatus(response.status); setReceiptError(null); }
+      } catch (failure) {
+        console.error('Receipt status lookup failed', failure);
+        if (active) setReceiptError(failure instanceof Error ? failure.message : String(failure));
+      } finally { busy = false; }
+    }
+    void check();
+    const timer = window.setInterval(check, 5000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [transactionId, receiptRefresh]);
 
   const decimals = props.chain === 'algorand' ? 6 : 12;
   const symbol = props.chain === 'algorand' ? 'ALGO' : 'XMR';
   const sender = props.sender;
   const network = props.chain === 'algorand' ? props.network : props.config.network;
   const isSweep = props.chain === 'monero' && sendAll;
+  const recipientError = addressValidationError(props.chain, recipient, network);
+  const recipientStatus = recipient.trim() ? recipientError ? 'invalid' : 'valid' : undefined;
+  const available = balance?.key === balanceKey ? balance.atomic : null;
+  let amountError: string | null = null;
+  if (amount.trim() && !isSweep) {
+    try {
+      const units = parseUnits(amount, decimals, props.chain === 'algorand');
+      if (available !== null && (props.chain === 'algorand'
+        ? units + 1000n > BigInt(available) : units >= BigInt(available))) {
+        amountError = `Insufficient funds. ${formatAtomic(available, decimals)} ${symbol} available before transaction fees${props.chain === 'algorand' ? ' (account minimum reserved)' : ' (unlocked)'}.`;
+      }
+    } catch (failure) {
+      amountError = failure instanceof Error ? failure.message : 'Invalid amount.';
+    }
+  }
+
+  async function checkMoneroBalance() {
+    if (props.chain !== 'monero') return;
+    balanceController.current?.abort();
+    const controller = new AbortController();
+    balanceController.current = controller;
+    const generation = ++balanceGeneration.current;
+    setBalanceBusy(true);
+    setBalanceError(null);
+    setBalance(null);
+    try {
+      const height = Number(restoreHeight);
+      if (!/^\d+$/.test(restoreHeight) || !Number.isSafeInteger(height)) throw new Error('Enter a non-negative restore height.');
+      await ensureHostPermissions([props.config.daemon.uri]);
+      controller.signal.throwIfAborted();
+      const response = await scanMoneroBalanceViaBackground({ config: props.config, primaryAddress: sender,
+        walletId: props.walletId, lockSecret: props.lockSecret, restoreHeight: height }, { signal: controller.signal });
+      controller.signal.throwIfAborted();
+      if (!response.ok || response.balanceAtomic === undefined) throw new Error(response.error ?? 'Unable to scan balance.');
+      if (generation === balanceGeneration.current) setBalance({ key: balanceKey, atomic: response.balanceAtomic });
+    } catch (failure) {
+      if (controller.signal.aborted) return;
+      console.error('Send balance scan failed', failure);
+      if (generation === balanceGeneration.current) setBalanceError(failure instanceof Error ? failure.message : String(failure));
+    } finally { if (generation === balanceGeneration.current) setBalanceBusy(false); }
+  }
+
+  function stopBalanceScan() {
+    balanceGeneration.current += 1;
+    balanceController.current?.abort();
+    setBalanceBusy(false);
+    setBalanceError('Scan stopped.');
+  }
 
   function resetReview() {
+    setApprovalSecret('');
     discardTransactionsViaBackground().catch((failure) => console.error('Unable to discard prepared transaction', failure));
     setPrepared(null);
     setIsReviewing(false);
     setResult(null);
     setTransactionId('');
+    setReceiptStatus(null);
+    setReceiptError(null);
   }
 
   async function onReview(event: FormEvent<HTMLFormElement>) {
@@ -82,9 +199,11 @@ function TransactionBuilder(props: TransactionBuilderProps) {
     setError(null);
     setIsSubmitting(true);
     try {
+      if (recipientError) throw new Error(recipientError);
+      if (amountError) throw new Error(amountError);
       await ensureHostPermissions([props.chain === 'algorand' ? props.endpoint.server : props.config.daemon.uri]);
       if (!isSweep) {
-        parseUnits(amount, decimals);
+        parseUnits(amount, decimals, props.chain === 'algorand');
       }
       if (!recipient.trim()) {
         throw new Error('Recipient address is required.');
@@ -96,7 +215,7 @@ function TransactionBuilder(props: TransactionBuilderProps) {
         }
       }
       const common = { primaryAddress: sender, recipient: recipient.trim(),
-        amountAtomic: isSweep ? '0' : parseUnits(amount, decimals).toString(), lockSecret: props.lockSecret };
+        amountAtomic: isSweep ? '0' : parseUnits(amount, decimals, props.chain === 'algorand').toString(), lockSecret: props.lockSecret };
       const response = await prepareTransactionViaBackground(props.chain === 'algorand' ?
         { ...common, chain: 'algorand', addressIndex: props.addressIndex, endpoint: props.endpoint, network: props.network, note } :
         { ...common, chain: 'monero', walletId: props.walletId, config: props.config, restoreHeight: Number(restoreHeight), sweep: sendAll });
@@ -120,8 +239,11 @@ function TransactionBuilder(props: TransactionBuilderProps) {
         props.chain === 'algorand' ? props.endpoint.server : props.config.daemon.uri,
       ]);
       if (!prepared) throw new Error('Prepare the transaction again.');
-      const sent = await submitTransactionViaBackground(prepared.id);
+      const secret = approvalSecret;
+      setApprovalSecret('');
+      const sent = await submitTransactionViaBackground(prepared.id, secret);
       if (!sent.ok) throw new Error(sent.error);
+      setBalance(null);
       setResult(`${props.chain === 'algorand' ? 'Submitted' : 'Relayed'} ${sent.review.hash} · amount ${formatAtomic(sent.review.amountAtomic, decimals)} ${symbol} · fee ${formatAtomic(sent.review.feeAtomic, decimals)} ${symbol}`);
       setTransactionId(sent.review.hash);
       setPrepared(null);
@@ -140,12 +262,15 @@ function TransactionBuilder(props: TransactionBuilderProps) {
         <code title={sender}>{sender.slice(0, 10)}...{sender.slice(-8)}</code>
       </div>
 
-      {!isReviewing ? (
+      {result ? null : !isReviewing ? (
         <form className="import-form" onSubmit={onReview}>
           <fieldset className="transaction-fields" disabled={isSubmitting}>
           <label htmlFor={`${props.chain}-tx-recipient`}>Recipient</label>
           <input
             id={`${props.chain}-tx-recipient`}
+            data-address-status={recipientStatus}
+            aria-invalid={recipientStatus === 'invalid'}
+            aria-describedby={recipientStatus ? `${props.chain}-recipient-feedback` : undefined}
             value={recipient}
             onChange={(event) => {
               setRecipient(event.target.value);
@@ -155,9 +280,15 @@ function TransactionBuilder(props: TransactionBuilderProps) {
             autoComplete="off"
             required
           />
+          {recipientStatus ? <p id={`${props.chain}-recipient-feedback`} className={recipientError ? 'error' : 'probe-ok'} role={recipientError ? 'alert' : 'status'}>
+            {recipientError ?? (props.chain === 'monero' ? 'Valid address for the selected Monero network.' : 'Valid Algorand address checksum. Confirm the recipient uses the selected network.')}
+          </p> : null}
           <label htmlFor={`${props.chain}-tx-amount`}>Amount ({symbol})</label>
           <input
             id={`${props.chain}-tx-amount`}
+            data-address-status={amountError ? 'invalid' : undefined}
+            aria-invalid={!!amountError}
+            aria-describedby={`${props.chain}-amount-feedback`}
             value={amount}
             onChange={(event) => {
               setAmount(event.target.value);
@@ -168,6 +299,14 @@ function TransactionBuilder(props: TransactionBuilderProps) {
             required={!isSweep}
             disabled={isSweep}
           />
+          <div id={`${props.chain}-amount-feedback`}>
+            {amountError ? <p className="error" role="alert">{amountError}</p> : null}
+            {available !== null ? <p className="hint" role="status">Available before fees: {formatAtomic(available, decimals)} {symbol}{props.chain === 'algorand' ? ' (account minimum reserved)' : ' (unlocked)'}</p> :
+              !balanceBusy ? <p className="hint" role="status">Available balance not checked.</p> : null}
+            {props.chain === 'monero' && (balanceBusy || isSubmitting) ? <ScanActivity restoreHeight={Number(restoreHeight)} onStop={balanceBusy ? stopBalanceScan : undefined} /> : null}
+            {props.chain === 'monero' ? <button type="button" className="refresh-btn" title="Scan unlocked balance" aria-label="Scan unlocked balance" disabled={balanceBusy} onClick={checkMoneroBalance}><RefreshCw size={16} className={balanceBusy ? 'is-spinning' : ''} /></button> : null}
+            {balanceError ? <p className="error" role="alert">{balanceError}</p> : null}
+          </div>
           {props.chain === 'algorand' ? (
             <>
               <label htmlFor="algorand-tx-note">Note (optional)</label>
@@ -202,7 +341,7 @@ function TransactionBuilder(props: TransactionBuilderProps) {
               {Number(restoreHeight) === 0 ? <p className="privacy-notice">Preparing from block 0 scans the full chain history and may use substantial data.</p> : null}
             </>
           )}
-          <button type="submit">{isSubmitting ? (props.chain === 'monero' ? 'Scanning and Preparing...' : 'Preparing...') : 'Review Transaction'}</button>
+          <button type="submit" disabled={!!recipientError || !!amountError || balanceBusy}>{isSubmitting ? (props.chain === 'monero' ? 'Scanning and Preparing...' : 'Preparing...') : 'Review Transaction'}</button>
           </fieldset>
         </form>
       ) : (
@@ -217,18 +356,31 @@ function TransactionBuilder(props: TransactionBuilderProps) {
           <p><span>Network</span><strong>{networkLabel(network)}</strong></p>
           {props.chain === 'algorand' && note ? <p><span>Note</span><code>{note}</code></p> : null}
           {props.chain === 'monero' ? <p><span>Restore height</span><strong>{restoreHeight}</strong></p> : null}
+          <form className="import-form" onSubmit={(event) => { event.preventDefault(); void onConfirm(); }}>
+          <label htmlFor="transaction-approval-secret">Password or PIN</label>
+          <input id="transaction-approval-secret" type="password" autoComplete="off" value={approvalSecret} onChange={event => setApprovalSecret(event.target.value)} disabled={isSubmitting} required />
           <div className="transaction-actions">
             <button type="button" className="secondary" onClick={resetReview} disabled={isSubmitting}>Edit</button>
-            <button type="button" onClick={onConfirm} disabled={isSubmitting}>
+            <button type="submit" disabled={isSubmitting || !approvalSecret}>
               {isSubmitting ? 'Broadcasting...' : 'Confirm and Send'}
             </button>
           </div>
+          </form>
         </div>
       )}
 
       {error ? <p className="error" role="alert">{error}</p> : null}
-      {result ? <div className="transaction-result" role="status"><p className="probe-ok result-value">{result}</p>
+      {result ? <div className="transaction-result" role="status">
+        <h3>{receiptStatus?.state === 'confirmed' ? 'Transaction confirmed' : receiptStatus?.state === 'rejected' ? 'Transaction rejected' : 'Awaiting confirmation'}</h3>
+        <p className="probe-ok result-value">{result}</p>
+        <p>To: <code className="result-value">{recipient}</code></p>
+        {receiptStatus?.block ? <p>{props.chain === 'algorand' ? 'Confirmed round' : 'Block height'}: <strong>{receiptStatus.block}</strong></p> : null}
+        {receiptStatus?.confirmations !== undefined ? <p>Confirmations: {receiptStatus.confirmations}</p> : null}
+        {receiptStatus?.detail ? <p className="error">{receiptStatus.detail}</p> : null}
+        {receiptError ? <p className="error">Confirmation check unavailable: {receiptError}</p> : null}
+        <button type="button" className="icon-btn" title="Refresh confirmation" aria-label="Refresh confirmation" onClick={() => setReceiptRefresh(value => value + 1)}><RefreshCw size={18} /></button>
         {transactionId ? <CopyValue value={transactionId} label="transaction ID" /> : null}
+        <button type="button" className="secondary" onClick={() => { resetReview(); setAmount(''); setRecipient(''); setNote(''); }}>New transaction</button>
       </div> : null}
     </div>
   );

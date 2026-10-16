@@ -17,9 +17,12 @@ network selector, and a private LocalNet alias may not be recognized by other
 wallets. The address copy button always copies the raw address. No secrets are
 encoded in receiving QR codes.
 
-Algorand balances refresh on account changes and every 15 seconds; superseded
+Algorand balances refresh on account changes and every five seconds; superseded
 requests cannot overwrite a newer result. Monero balances are scanned explicitly
-from the chosen restore height. Send review shows the prepared amount, fee, and
+from the chosen restore height, then poll for changed daemon heights every five
+seconds. Balance scans show block progress and can be stopped; Stop aborts active
+scan requests, pauses automatic rescans, and enables changing the restore height
+before scanning again. Partial results are discarded. Send review shows the prepared amount, fee, and
 total debit; confirmation submits the retained signed transaction.
 
 ### Selected Chain And Endpoint
@@ -37,9 +40,10 @@ require loopback endpoints. These checks detect configuration errors, not dishon
 nodes impersonating a chain. Offline Receive displays the selected chain, not a
 claim of a verified live connection.
 
-Monero verification, separate relay, and view-only funding APIs are provided by
-the exact published dependency `zebgen-monero-wasm@0.3.0`. No sibling WASM checkout
-is required to install or build the extension.
+Balance-scan cancellation and progress use the exact published dependency
+`zebgen-monero-wasm@0.4.0`. No sibling WASM checkout is required to install or
+build the extension. Transaction preparation is separate from cancellable
+balance scans.
 
 ## Installing a release build (testers)
 

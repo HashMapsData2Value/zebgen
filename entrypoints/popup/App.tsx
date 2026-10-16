@@ -3,7 +3,7 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import * as bip39 from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { browser } from 'wxt/browser';
-import { ArrowLeft, ArrowDownLeft, ArrowUpRight, LockKeyhole, Maximize2 } from 'lucide-react';
+import { ArrowLeft, ArrowDownLeft, ArrowUpRight, ArrowLeftRight, LockKeyhole, Maximize2, Plus, Settings } from 'lucide-react';
 
 import algorandLogo from '../../assets/algorand_logo.png';
 import moneroLogo from '../../assets/monero_logo.png';
@@ -18,7 +18,6 @@ import {
   unlockWallet,
 } from '../../lib/wallet/algoWallet';
 import {
-  combineMoneroKeyMaterialFromPrivateSpendKeys,
   computeCombinedAddressFromPublicKeys,
   computeCombinedAddressWithPrivateAndPublic,
   generateMoneroKeyMaterial,
@@ -27,6 +26,8 @@ import {
 } from '../../lib/wallet/moneroWallet';
 import {
   getMoneroWalletState,
+  listMoneroCombinedContexts,
+  loadMoneroCombinedContext,
   saveMoneroWallet,
   unlockMoneroWallet,
   type MoneroWalletSummary,
@@ -43,7 +44,9 @@ import {
   type NetworkSettings,
 } from '../../lib/network/networks';
 import { getNetworkSettings, saveNetworkSettings } from '../../lib/network/networkStore';
-import { currentRestoreHeight, swapAddressHeight } from '../../lib/monero/restoreHeight';
+import { currentRestoreHeight } from '../../lib/monero/restoreHeight';
+import { recoverCombinedWallet } from '../../lib/wallet/combinedRecovery';
+import type { CombinedAddressContext } from '../../lib/wallet/combinedAddressContext';
 import AlgorandAddressCard from './AlgorandAddressCard';
 import MoneroAddressCard from './MoneroAddressCard';
 import MoneroKeyList from './MoneroKeyList';
@@ -61,8 +64,8 @@ interface AppProps {
 }
 
 function App({ variant = 'popup' }: AppProps) {
-  const [selectedWalletType, setSelectedWalletType] = useState<'algorand' | 'monero' | null>(
-    null
+  const [selectedWalletType, setSelectedWalletType] = useState<'algorand' | 'monero' | 'leakswap'>(
+    'algorand'
   );
   const [isLoading, setIsLoading] = useState(true);
   const [isLockConfigured, setIsLockConfigured] = useState(false);
@@ -83,15 +86,18 @@ function App({ variant = 'popup' }: AppProps) {
   const [isSettingLock, setIsSettingLock] = useState(false);
   const [isUnlocking, setIsUnlocking] = useState(false);
   const [isDerivingAddress, setIsDerivingAddress] = useState(false);
-  const [algorandView, setAlgorandView] = useState<'wallet' | 'transaction' | 'receive' | 'leakswap' | 'settings'>('wallet');
+  const [algorandView, setAlgorandView] = useState<'wallet' | 'transaction' | 'receive' | 'settings'>('wallet');
   const [moneroWallets, setMoneroWallets] = useState<MoneroWalletSummary[]>([]);
   const [activeMoneroWalletId, setActiveMoneroWalletId] = useState<number | null>(null);
   const [moneroMaterial, setMoneroMaterial] = useState<MoneroKeyMaterial | null>(null);
   const [moneroSetupMode, setMoneroSetupMode] = useState<'generate' | 'import' | null>(null);
-  const [moneroView, setMoneroView] = useState<'wallet' | 'add' | 'combine' | 'recover' | 'settings' | 'transaction' | 'receive' | 'leakswap'>('wallet');
+  const [moneroView, setMoneroView] = useState<'wallet' | 'add' | 'combine' | 'recover' | 'settings' | 'transaction' | 'receive'>('wallet');
   const [importedPrivateSpendKey, setImportedPrivateSpendKey] = useState('');
   const [counterpartyPrivateSpendKey, setCounterpartyPrivateSpendKey] = useState('');
   const [recoveredMaterial, setRecoveredMaterial] = useState<MoneroKeyMaterial | null>(null);
+  const [recoveryContexts, setRecoveryContexts] = useState<CombinedAddressContext[]>([]);
+  const [recoveryAddress, setRecoveryAddress] = useState('');
+  const [isLoadingRecovery, setIsLoadingRecovery] = useState(false);
   const [counterpartyPrivateViewKey, setCounterpartyPrivateViewKey] = useState('');
   const [counterpartyPublicSpendKey, setCounterpartyPublicSpendKey] = useState('');
   const [publicSpendKeyA, setPublicSpendKeyA] = useState('');
@@ -122,7 +128,7 @@ function App({ variant = 'popup' }: AppProps) {
         setAlgoAddress(state.algoAddress);
         setAddressIndex(0);
         setIsUnlocked(false);
-        setSelectedWalletType(null);
+        setSelectedWalletType('algorand');
         setSessionLockSecret(null);
       } catch (err) {
         if (!isMounted) {
@@ -159,6 +165,30 @@ function App({ variant = 'popup' }: AppProps) {
     setNetworkSettings(next);
     await saveNetworkSettings(next);
   }
+
+  useEffect(() => {
+    let isMounted = true;
+    setRecoveryContexts([]);
+    setRecoveryAddress('');
+    setRecoveredMaterial(null);
+    if (moneroView !== 'recover' || !sessionLockSecret || !networkSettings || activeMoneroWalletId === null) {
+      setIsLoadingRecovery(false);
+      return;
+    }
+    setIsLoadingRecovery(true);
+    listMoneroCombinedContexts(activeMoneroWalletId, networkSettings.monero.network, sessionLockSecret)
+      .then((contexts) => {
+        if (!isMounted) return;
+        setRecoveryContexts(contexts);
+        setRecoveryAddress(contexts.length === 1 ? contexts[0].combinedAddress : '');
+      })
+      .catch((err) => {
+        console.error('Unable to load recovery contexts', err);
+        if (isMounted) setError(err instanceof Error ? err.message : 'Unable to load saved swaps.');
+      })
+      .finally(() => { if (isMounted) setIsLoadingRecovery(false); });
+    return () => { isMounted = false; };
+  }, [moneroView, activeMoneroWalletId, networkSettings, sessionLockSecret]);
 
   async function switchAlgorandNetwork(network: AlgorandNetworkId) {
     if (!networkSettings) {
@@ -282,7 +312,8 @@ function App({ variant = 'popup' }: AppProps) {
       setAlgoAddress(unlocked.algoAddress);
       setAddressIndex(0);
       setIsUnlocked(true);
-      setSelectedWalletType(null);
+      setSelectedWalletType('algorand');
+      setAlgorandView('wallet');
       setSessionLockSecret(unlockSecret);
       setUnlockSecret('');
     } catch (err) {
@@ -298,7 +329,7 @@ function App({ variant = 'popup' }: AppProps) {
     setUnlockSecret('');
     setSessionLockSecret(null);
     setAddressIndex(0);
-    setSelectedWalletType(null);
+    setSelectedWalletType('algorand');
     setMoneroMaterial(null);
     setRecoveredMaterial(null);
   }
@@ -421,15 +452,19 @@ function App({ variant = 'popup' }: AppProps) {
   function onRecoverCombinedWallet(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+    setRecoveredMaterial(null);
     if (!moneroMaterial || !networkSettings) {
       setError('Open your Monero wallet first.');
       return;
     }
     try {
+      const context = recoveryContexts.find((saved) => saved.combinedAddress === recoveryAddress);
+      if (!context || isLoadingRecovery) throw new Error('Select a saved combined address first.');
       setRecoveredMaterial(
-        combineMoneroKeyMaterialFromPrivateSpendKeys(
-          moneroMaterial.privateSpendKey,
+        recoverCombinedWallet(
+          moneroMaterial,
           counterpartyPrivateSpendKey.trim(),
+          context,
           networkSettings.monero.networkType
         )
       );
@@ -445,8 +480,11 @@ function App({ variant = 'popup' }: AppProps) {
     setError(null);
     setIsSubmitting(true);
     try {
-      const restoreHeight = await swapAddressHeight(recoveredMaterial.address);
-      const activeWalletId = await saveMoneroWallet(recoveredMaterial, sessionLockSecret, restoreHeight);
+      const selected = recoveryContexts.find((saved) => saved.combinedAddress === recoveredMaterial.address);
+      if (!selected) throw new Error('Select a saved combined address first.');
+      const context = await loadMoneroCombinedContext(selected, sessionLockSecret);
+      if (!context) throw new Error('Saved swap context is no longer available.');
+      const activeWalletId = await saveMoneroWallet(recoveredMaterial, sessionLockSecret, context.restoreHeight);
       const moneroState = await getMoneroWalletState();
       setMoneroMaterial(recoveredMaterial);
       setMoneroWallets(moneroState.wallets);
@@ -484,8 +522,8 @@ function App({ variant = 'popup' }: AppProps) {
 
   async function onBack() {
     setError(null);
-    if (selectedWalletType === 'monero' && (moneroView === 'combine' || moneroView === 'recover')) {
-      setMoneroView('leakswap');
+    if (selectedWalletType === 'leakswap' && (moneroView === 'combine' || moneroView === 'recover')) {
+      setMoneroView('wallet');
       setRecoveredMaterial(null);
       return;
     }
@@ -504,7 +542,8 @@ function App({ variant = 'popup' }: AppProps) {
       return;
     }
     if (selectedWalletType === 'monero' && moneroView === 'add') {
-      setSelectedWalletType(null);
+      setSelectedWalletType('algorand');
+      setAlgorandView('wallet');
       return;
     }
     if (selectedWalletType === 'monero' && moneroView !== 'wallet') {
@@ -516,7 +555,6 @@ function App({ variant = 'popup' }: AppProps) {
       setMnemonicMode(null);
       return;
     }
-    setSelectedWalletType(null);
   }
 
   async function onSelectAddressIndex(nextIndex: number) {
@@ -563,7 +601,9 @@ function App({ variant = 'popup' }: AppProps) {
     <main className={variant === 'full' ? 'popup-root full-root' : 'popup-root'}>
       <div className="app-header">
         <div className="app-header-leading">
-          {isUnlocked && selectedWalletType !== null ? (
+          {isUnlocked && (selectedWalletType === 'algorand'
+            ? algorandView !== 'wallet' || mnemonicMode !== null
+            : selectedWalletType === 'leakswap' ? moneroView === 'combine' || moneroView === 'recover' : moneroView !== 'wallet') ? (
             <button type="button" className="icon-btn" onClick={onBack} title="Back" aria-label="Back">
               <ArrowLeft size={18} />
             </button>
@@ -571,6 +611,10 @@ function App({ variant = 'popup' }: AppProps) {
           <h1>Zebgen Wallet</h1>
         </div>
         <div className="header-actions">
+        {isUnlocked && selectedWalletType !== 'leakswap' ? <button type="button" className="icon-btn" title="Network settings" aria-label="Network settings" onClick={() => {
+          if (selectedWalletType === 'algorand') setAlgorandView('settings');
+          else setMoneroView('settings');
+        }}><Settings size={18} /></button> : null}
         {isUnlocked ? <button type="button" className="icon-btn" onClick={onLockWallet} title="Lock wallet" aria-label="Lock wallet"><LockKeyhole size={18} /></button> : null}
         {variant === 'popup' ? (
           <button
@@ -590,32 +634,16 @@ function App({ variant = 'popup' }: AppProps) {
       </div>
 
       {isUnlocked ? (
-        <nav className="chain-tabs" aria-label="Chain">
+        <nav className="chain-tabs" aria-label="Wallet navigation">
           <button type="button" aria-pressed={selectedWalletType === 'algorand'} onClick={() => {
             setError(null); setSelectedWalletType('algorand'); setAlgorandView('wallet'); setMoneroView('wallet'); setRecoveredMaterial(null);
           }}><img src={algorandLogo} alt="" />Algorand</button>
           <button type="button" aria-pressed={selectedWalletType === 'monero'} onClick={() => {
             setAlgorandView('wallet'); setRecoveredMaterial(null); onSelectMonero();
           }}><img src={moneroLogo} alt="" />Monero</button>
-        </nav>
-      ) : null}
-
-      {isUnlocked && selectedWalletType !== null ? (
-        <nav className="section-tabs" aria-label={`${selectedWalletType} sections`}>
-          {(['wallet', 'leakswap', 'settings'] as const).map((view) => (
-            <button type="button" key={view}
-              aria-pressed={selectedWalletType === 'algorand' ? algorandView === view :
-                moneroView === view || (view === 'leakswap' && (moneroView === 'combine' || moneroView === 'recover'))}
-              onClick={() => {
-                setError(null); setRecoveredMaterial(null);
-                if (selectedWalletType === 'algorand') setAlgorandView(view);
-                else if (view === 'settings') setMoneroView('settings');
-                else if (moneroWallets.length > 0) {
-                  if (!moneroMaterial) onSelectMoneroWallet(activeMoneroWalletId ?? moneroWallets[0].id);
-                  setMoneroView(view);
-                }
-              }}>{view === 'wallet' ? 'Overview' : view === 'leakswap' ? 'LeakSwap' : 'Settings'}</button>
-          ))}
+          <button type="button" aria-pressed={selectedWalletType === 'leakswap'} onClick={() => {
+            setError(null); setRecoveredMaterial(null); setMoneroView('wallet'); setSelectedWalletType('leakswap');
+          }}><ArrowLeftRight size={18} />LeakSwap</button>
         </nav>
       ) : null}
 
@@ -698,32 +726,6 @@ function App({ variant = 'popup' }: AppProps) {
         </section>
       ) : null}
 
-      {!isLoading && isLockConfigured && isUnlocked && selectedWalletType === null ? (
-        <section className="card">
-          <h2>Select Wallet Type</h2>
-          <p className="hint">Choose the ecosystem wallet you want to open.</p>
-
-          <div className="wallet-type-grid" role="group" aria-label="Wallet type">
-            <button
-              type="button"
-              className="choice-button wallet-type-button"
-              onClick={() => setSelectedWalletType('algorand')}
-            >
-              <img className="wallet-type-logo" src={algorandLogo} alt="" />
-              Algorand
-            </button>
-            <button
-              type="button"
-              className="choice-button wallet-type-button"
-              onClick={onSelectMonero}
-            >
-              <img className="wallet-type-logo" src={moneroLogo} alt="" />
-              Monero
-            </button>
-          </div>
-        </section>
-      ) : null}
-
       {!isLoading &&
         isLockConfigured &&
         isUnlocked &&
@@ -745,9 +747,6 @@ function App({ variant = 'popup' }: AppProps) {
                 settings={networkSettings}
                 onChangeNetwork={switchAlgorandNetwork}
                 onOpenSettings={() => setAlgorandView('settings')}
-                onPrev={() => onSelectAddressIndex(addressIndex - 1)}
-                onNext={() => onSelectAddressIndex(addressIndex + 1)}
-                isDeriving={isDerivingAddress}
               />
             </>
           ) : (
@@ -757,13 +756,15 @@ function App({ variant = 'popup' }: AppProps) {
             <button className="secondary" type="button" onClick={() => setAlgorandView('transaction')}><ArrowUpRight size={18} />Send ALGO</button>
             <button className="secondary" type="button" onClick={() => setAlgorandView('receive')}><ArrowDownLeft size={18} />Receive</button>
           </div>
+          <div className="wallet-action-grid">
+            <button className="secondary" type="button" disabled={isDerivingAddress} onClick={() => onSelectAddressIndex(lastAddressIndex + 1)}><Plus size={18} />{isDerivingAddress ? 'Adding Address...' : 'Add Address'}</button>
+          </div>
         </section>
       ) : null}
 
-      {isUnlocked && selectedWalletType === 'algorand' && isSignedIn && algorandView === 'leakswap' ? <LeakSwapPanel /> : null}
       {isUnlocked && selectedWalletType === 'algorand' && isSignedIn && algorandView === 'receive' && algoAddress && networkSettings ?
         <Receive chain="algorand" address={algoAddress} network={networkSettings.algorand.network} /> : null}
-      {isUnlocked && selectedWalletType === 'algorand' && isSignedIn && algorandView === 'settings' ? (
+      {isUnlocked && selectedWalletType === 'algorand' && algorandView === 'settings' ? (
         <section><h2>Algorand settings</h2>
           {networkSettings ? <NetworkSettingsPanel chain="algorand" settings={networkSettings} onChange={updateNetworkSettings} /> : null}
           <RevealSeedPhrase />
@@ -800,13 +801,13 @@ function App({ variant = 'popup' }: AppProps) {
         isLockConfigured &&
         isUnlocked &&
         selectedWalletType === 'algorand' &&
-        !isSignedIn ? (
+        !isSignedIn && algorandView === 'wallet' ? (
         <section className="card">
           <h2 className="chain-title">
             <img className="chain-logo" src={algorandLogo} alt="" />
             Add Algorand address?
           </h2>
-          <p className="hint">Import a BIP39 mnemonic encrypted by your wallet password or PIN.</p>
+          <p className="hint">Generate a new 24-word Algorand mnemonic or import an existing mnemonic.</p>
 
           <form className="import-form" onSubmit={onImportMnemonic}>
             {mnemonicMode === null ? (
@@ -816,14 +817,14 @@ function App({ variant = 'popup' }: AppProps) {
                   className="choice-button"
                   onClick={() => onSelectMnemonicMode('generate')}
                 >
-                  Generate new mnemonic
+                  Generate mnemonic
                 </button>
                 <button
                   type="button"
                   className="choice-button"
                   onClick={() => onSelectMnemonicMode('existing')}
                 >
-                  Input existing seedphrase
+                  Import mnemonic
                 </button>
               </div>
             ) : null}
@@ -845,7 +846,7 @@ function App({ variant = 'popup' }: AppProps) {
 
             {mnemonicMode === 'generate' ? (
               <>
-                <label htmlFor="generated-mnemonic">Generated Mnemonic</label>
+                <label htmlFor="generated-mnemonic">Recovery mnemonic</label>
                 <textarea
                   id="generated-mnemonic"
                   className="mnemonic-input mnemonic-valid"
@@ -854,7 +855,7 @@ function App({ variant = 'popup' }: AppProps) {
                   readOnly
                 />
                 <button type="button" className="secondary" onClick={onGenerateNewMnemonic}>
-                  Regenerate 24 words
+                  Regenerate mnemonic
                 </button>
               </>
             ) : null}
@@ -864,7 +865,7 @@ function App({ variant = 'popup' }: AppProps) {
                 type="submit"
                 disabled={isSubmitting || mnemonicValidationState !== 'valid'}
               >
-                {isSubmitting ? 'Importing...' : 'Import and Encrypt'}
+                {isSubmitting ? 'Encrypting...' : 'Encrypt and Save'}
               </button>
             ) : null}
           </form>
@@ -885,10 +886,10 @@ function App({ variant = 'popup' }: AppProps) {
           {moneroSetupMode === null ? (
             <div className="seed-choice-group" role="group" aria-label="Monero key source">
               <button type="button" className="choice-button" onClick={() => onSelectMoneroSetupMode('generate')}>
-                Generate
+                Generate mnemonic
               </button>
               <button type="button" className="choice-button" onClick={() => onSelectMoneroSetupMode('import')}>
-                Import
+                Import mnemonic
               </button>
             </div>
           ) : (
@@ -903,21 +904,24 @@ function App({ variant = 'popup' }: AppProps) {
                     onChange={(event) => setImportedPrivateSpendKey(event.target.value)}
                     placeholder="Enter a 25-word Monero mnemonic or 64 hexadecimal characters"
                     autoComplete="off"
-                    rows={5}
+                    rows={4}
                     required
                   />
                 </>
               ) : null}
               {moneroSetupMode === 'generate' && moneroMaterial ? (
                 <>
-                  <label htmlFor="generated-monero-mnemonic">Monero Recovery Mnemonic</label>
+                  <label htmlFor="generated-monero-mnemonic">Recovery mnemonic</label>
                   <textarea
                     id="generated-monero-mnemonic"
                     className="mnemonic-input mnemonic-valid"
                     value={generatedMoneroMnemonic}
-                    rows={5}
+                    rows={4}
                     readOnly
                   />
+                  <button type="button" className="secondary" onClick={() => onSelectMoneroSetupMode('generate')}>
+                    Regenerate mnemonic
+                  </button>
                   <p className="seed-warning">Store these 25 words offline. They recover this Monero address and its private spend key.</p>
                 </>
               ) : null}
@@ -967,16 +971,14 @@ function App({ variant = 'popup' }: AppProps) {
                 setMoneroView('add');
               }}
             >
-              Add Address
+              <Plus size={18} />Add Address
             </button>
           </div>
         </section>
       ) : null}
 
-      {isUnlocked && selectedWalletType === 'monero' && moneroMaterial && moneroView === 'leakswap' ?
-        <LeakSwapPanel key={`${activeMoneroWalletId}-${networkSettings?.monero.network}`} material={moneroMaterial}
-          walletId={activeMoneroWalletId} network={networkSettings?.monero.network} lockSecret={sessionLockSecret}
-          onCombine={() => setMoneroView('combine')} onRecover={() => setMoneroView('recover')} /> : null}
+      {isUnlocked && selectedWalletType === 'leakswap' && moneroView !== 'combine' && moneroView !== 'recover' ?
+        <LeakSwapPanel key={`${networkSettings?.algorand.network}-${networkSettings?.algorand.algod.server}`} lockSecret={sessionLockSecret} /> : null}
       {isUnlocked && selectedWalletType === 'monero' && moneroMaterial && networkSettings && moneroView === 'receive' ?
         <Receive chain="monero" address={moneroMaterial.address} network={networkSettings.monero.network} /> : null}
 
@@ -1021,7 +1023,7 @@ function App({ variant = 'popup' }: AppProps) {
         </section>
       ) : null}
 
-      {!isLoading && isUnlocked && selectedWalletType === 'monero' && moneroView === 'combine' ? (
+      {!isLoading && isUnlocked && selectedWalletType === 'leakswap' && moneroView === 'combine' ? (
         <section className="card">
           <h2 className="chain-title">
             <img className="chain-logo" src={moneroLogo} alt="" />
@@ -1052,7 +1054,7 @@ function App({ variant = 'popup' }: AppProps) {
         </section>
       ) : null}
 
-      {!isLoading && isUnlocked && selectedWalletType === 'monero' && moneroView === 'recover' ? (
+      {!isLoading && isUnlocked && selectedWalletType === 'leakswap' && moneroView === 'recover' ? (
         <section className="card">
           <h2 className="chain-title">
             <img className="chain-logo" src={moneroLogo} alt="" />
@@ -1060,9 +1062,16 @@ function App({ variant = 'popup' }: AppProps) {
           </h2>
           <p className="hint">Add the counterparty's leaked private spend key to your saved key to gain full spend and view control of the combined address.</p>
           <form className="import-form" onSubmit={onRecoverCombinedWallet}>
+            <label htmlFor="recovery-combined-address">Combined address</label>
+            <select id="recovery-combined-address" value={recoveryAddress} disabled={isLoadingRecovery || isSubmitting}
+              onChange={(event) => { setRecoveryAddress(event.target.value); setRecoveredMaterial(null); setError(null); }}>
+              <option value="">{isLoadingRecovery ? 'Loading...' : 'Select saved address'}</option>
+              {recoveryContexts.map((context) => <option key={context.combinedAddress} value={context.combinedAddress}>{context.combinedAddress}</option>)}
+            </select>
+            {!isLoadingRecovery && recoveryContexts.length === 0 ? <p className="error">No saved swap context for this wallet and network.</p> : null}
             <label htmlFor="counterparty-private-spend">Counterparty private spend key</label>
-            <input id="counterparty-private-spend" value={counterpartyPrivateSpendKey} onChange={(event) => setCounterpartyPrivateSpendKey(event.target.value)} placeholder="64 hexadecimal characters" autoComplete="off" required />
-            <button type="submit">Recover Full Key Material</button>
+            <input id="counterparty-private-spend" value={counterpartyPrivateSpendKey} onChange={(event) => { setCounterpartyPrivateSpendKey(event.target.value); setRecoveredMaterial(null); setError(null); }} placeholder="64 hexadecimal characters" autoComplete="off" disabled={isSubmitting} required />
+            <button type="submit" disabled={isLoadingRecovery || !recoveryAddress || isSubmitting}>Recover Full Key Material</button>
           </form>
           {recoveredMaterial ? (
             <div className="flow-panel">
