@@ -47,15 +47,15 @@ export interface NetworkSettings {
 const ALGO_LOCALNET_TOKEN = 'a'.repeat(64);
 
 export const ALGORAND_NETWORK_IDS: AlgorandNetworkId[] = ['mainnet', 'testnet', 'localnet'];
-export const MONERO_NETWORK_IDS: MoneroNetworkId[] = ['mainnet', 'testnet', 'stagenet', 'regtest'];
+export const MONERO_NETWORK_IDS: MoneroNetworkId[] = ['mainnet', 'stagenet', 'regtest'];
 
 // Per-network accent colors used for the network badge and address framing.
 export const NETWORK_COLORS: Record<string, string> = {
-  mainnet: '#3b82f6', // blue
-  testnet: '#ef4444', // red
-  localnet: '#eab308', // yellow
-  stagenet: '#22c55e', // green
-  regtest: '#eab308',
+  mainnet: '#a78bfa',
+  testnet: '#eab308',
+  localnet: '#ffffff',
+  stagenet: '#eab308',
+  regtest: '#ffffff',
 };
 
 export function networkColor(network: string): string {

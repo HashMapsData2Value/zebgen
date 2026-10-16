@@ -55,6 +55,7 @@ export async function probeIndexer(endpoint: IndexerEndpoint): Promise<IndexerPr
 export interface BalanceResult {
   ok: boolean;
   algos?: number;
+  spendableAtomic?: string;
   error?: string;
 }
 
@@ -69,7 +70,8 @@ export async function getAlgoBalance(
       verifyAlgorandGenesis(network, params.genesisID ?? '', endpoint.server);
     }
     const info = await createAlgodClient(endpoint).accountInformation(address).do();
-    return { ok: true, algos: Number(info.amount) / 1e6 };
+    const available = info.amount > info.minBalance ? info.amount - info.minBalance : 0n;
+    return { ok: true, algos: Number(info.amount) / 1e6, spendableAtomic: available.toString() };
   } catch (err) {
     return { ok: false, error: errorMessage(err) };
   }
