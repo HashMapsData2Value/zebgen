@@ -1,4 +1,6 @@
 import { fromSeed, KeyContext, XHDWalletAPI } from '@algorandfoundation/xhd-wallet-api';
+import type { Handshake } from '../../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapHandshake';
+import { signCanonicalSwapHandshake } from './swapHandshakeSigning';
 import * as bip39 from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import algosdk from 'algosdk';
@@ -238,8 +240,8 @@ export async function prepareAlgoPayment(
   if (!algosdk.isValidAddress(receiver)) {
     throw new Error('Enter a valid Algorand recipient address.');
   }
-  if (amountMicroAlgos <= 0n) {
-    throw new Error('Amount must be greater than zero.');
+  if (amountMicroAlgos < 0n) {
+    throw new Error('Amount must not be negative.');
   }
   if (!Number.isInteger(addressIndex) || addressIndex < 0) {
     throw new Error('Address index must be a non-negative integer.');
@@ -382,6 +384,27 @@ export async function signRawTransactions(
   } finally {
     decryptedSeed.fill(0);
   }
+}
+
+export async function signSwapHandshake(lockSecret: string, message: Omit<Handshake, 'signature'>): Promise<string> {
+  const expectedAddress = message.kind === 'invite'
+    ? (message.payload as { aliAlgoAddress: string }).aliAlgoAddress
+    : (message.payload as { xinAlgoAddress: string }).xinAlgoAddress;
+  await unlockWallet(lockSecret);
+  const meta = await getWalletMeta();
+  const record = meta?.activeSeedId ? await getSeedRecord(meta.activeSeedId) : null;
+  if (!record) throw new Error('No active seed found.');
+  const seed = await decryptSeed(record.encryptedSeed, lockSecret, record.salt, record.iv);
+  try {
+    const root = fromSeed(seed as unknown as Buffer);
+    try {
+      const wallet = new XHDWalletAPI();
+      const publicKey = await wallet.keyGen(root, KeyContext.Address, 0, 0);
+      if (new algosdk.Address(publicKey).toString() !== expectedAddress) throw new Error('Swap authentication signer does not match the active wallet.');
+      const signature = await signCanonicalSwapHandshake(root, message);
+      return Array.from(signature, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    } finally { root.fill(0); }
+  } finally { seed.fill(0); }
 }
 
 export async function revealActiveSeedMnemonic(lockSecret: string): Promise<string> {

@@ -1,7 +1,7 @@
 import * as moneroWasm from 'zebgen-monero-wasm';
 import { createMoneroTransaction, initializeMoneroWasm, verifyMoneroNetwork } from '../monero/moneroDaemon';
 import type { AlgodEndpoint, AlgorandNetworkId, MoneroNetworkConfig } from '../network/networks';
-import { prepareAlgoPayment, submitAlgoPayment } from './algoWallet';
+import { prepareAlgoPayment, submitAlgoPayment, unlockWallet } from './algoWallet';
 import { unlockMoneroWallet } from './moneroVault';
 
 export type PrepareTransactionRequest = {
@@ -90,13 +90,17 @@ export async function prepareTransaction(owner: string, request: PrepareTransact
   }
 }
 
-export async function submitPreparedTransaction(owner: string, id: string): Promise<TransactionResponse> {
+export async function submitPreparedTransaction(owner: string, id: string, lockSecret: string): Promise<TransactionResponse> {
   pruneExpired();
   const transaction = preparedTransactions.get(id);
   if (!transaction || transaction.owner !== owner) return { ok: false, error: 'Transaction expired or was cancelled. Review it again.' };
   if (transaction.submitting) return { ok: false, error: 'Transaction is already being broadcast.' };
   transaction.submitting = true;
   try {
+    await unlockWallet(lockSecret);
+    if (preparedTransactions.get(id) !== transaction || transaction.review.expiresAt <= Date.now()) {
+      throw new Error('Transaction expired or was cancelled. Review it again.');
+    }
     let hash: string;
     if (transaction.chain === 'algorand') {
       hash = await submitAlgoPayment(transaction.endpoint, transaction.signed);
