@@ -25,7 +25,17 @@ export default defineConfig({
     },
   }),
   vite: () => ({
-    plugins: [nodePolyfills()],
+    plugins: [nodePolyfills(), {
+      name: 'content-hashed-wasm',
+      outputOptions(options) {
+        const original = options.assetFileNames;
+        options.assetFileNames = asset => {
+          if (asset.names.some(name => name.endsWith('.wasm'))) return 'assets/[name]-[hash][extname]';
+          return typeof original === 'function' ? original(asset) : original ?? 'assets/[name]-[hash][extname]';
+        };
+        return options;
+      },
+    }],
     optimizeDeps: {
       include: ['@algorandfoundation/xhd-wallet-api'],
     },

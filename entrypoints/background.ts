@@ -13,6 +13,7 @@ import type {
 import { getSignedInState } from '../lib/wallet/algoWallet';
 import { getMoneroWalletState } from '../lib/wallet/moneroVault';
 import { discardPreparedTransactions, prepareTransaction, submitPreparedTransaction } from '../lib/wallet/transactionService';
+import { readTransactionStatus } from '../lib/wallet/transactionStatus';
 
 // Request types answerable straight from cached wallet-meta (public
 // addresses only) once the origin has already been approved once.
@@ -25,6 +26,31 @@ const pendingRequests = new Map<string, PendingZebgenRequest>();
 const pendingResolvers = new Map<string, (response: ZebgenBackgroundResponse) => void>();
 
 export default defineBackground(() => {
+  browser.runtime.onConnect.addListener(port => {
+    if (port.name !== 'monero:balanceScan') return;
+    const sender = port.sender;
+    if (sender?.id !== browser.runtime.id || !sender.url?.startsWith(browser.runtime.getURL('/'))) {
+      port.disconnect();
+      return;
+    }
+    const controller = new AbortController();
+    let started = false;
+    port.onDisconnect.addListener(() => controller.abort());
+    port.onMessage.addListener(message => {
+      if (message?.type === 'keepalive') return;
+      if (started || controller.signal.aborted) return;
+      started = true;
+      void scanMoneroBalance(message.request, {
+        signal: controller.signal,
+        onProgress: progress => { if (!controller.signal.aborted) port.postMessage({ type: 'progress', progress }); },
+      }).then(result => {
+        if (!controller.signal.aborted) port.postMessage({ type: 'result', result });
+      }).catch(error => {
+        console.error('Balance scan connection failed', error);
+        if (!controller.signal.aborted) port.postMessage({ type: 'result', result: errorResponse(error) });
+      });
+    });
+  });
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const internalSender = sender.id === browser.runtime.id && Boolean(sender.url?.startsWith(browser.runtime.getURL('/')));
     if (isProviderRequest(message)) {
@@ -42,12 +68,19 @@ export default defineBackground(() => {
       return false;
     }
     const owner = `${sender.documentId ?? sender.tab?.id ?? 'popup'}:${sender.url}`;
+    if (backgroundMessage?.type === 'wallet:transactionStatus') {
+      readTransactionStatus(backgroundMessage.request).then(status => sendResponse({ ok: true, status })).catch(error => {
+        console.error('Transaction status lookup failed', error);
+        sendResponse(errorResponse(error));
+      });
+      return true;
+    }
     if (backgroundMessage?.type === 'wallet:prepareTransaction') {
       prepareTransaction(owner, backgroundMessage.request).then(sendResponse).catch((error) => sendResponse(errorResponse(error)));
       return true;
     }
     if (backgroundMessage?.type === 'wallet:submitTransaction') {
-      submitPreparedTransaction(owner, backgroundMessage.id).then(sendResponse).catch((error) => sendResponse(errorResponse(error)));
+      submitPreparedTransaction(owner, backgroundMessage.id, backgroundMessage.lockSecret).then(sendResponse).catch((error) => sendResponse(errorResponse(error)));
       return true;
     }
     if (backgroundMessage?.type === 'wallet:discardTransactions') {

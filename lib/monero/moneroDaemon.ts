@@ -110,18 +110,22 @@ export interface ScanMoneroBalanceResult {
   error?: string;
 }
 
-export async function scanMoneroBalance(request: ScanMoneroBalanceRequest): Promise<ScanMoneroBalanceResult> {
+export async function scanMoneroBalance(request: ScanMoneroBalanceRequest, control?: MoneroFundingControl): Promise<ScanMoneroBalanceResult> {
   try {
+    control?.signal?.throwIfAborted();
     await verifyMoneroNetwork(request.config);
+    control?.signal?.throwIfAborted();
     if (diagnosticMemory) console.log('[monero-wasm] balance memory before scan:', diagnosticMemory.buffer.byteLength);
     if (!Number.isSafeInteger(request.restoreHeight) || request.restoreHeight < 0) {
       throw new Error('Restore height must be a non-negative integer.');
     }
     const material = await unlockMoneroWallet(request.lockSecret, request.config.networkType, request.walletId);
+    control?.signal?.throwIfAborted();
     if (!material || material.address !== request.primaryAddress) throw new Error('Wallet address changed. Refresh the wallet and try again.');
     await loadMoneroWasm();
     const balanceAtomic = await unlockedBalance(...daemonConnection(request.config),
-      material.privateSpendKey, material.privateViewKey, request.restoreHeight);
+      material.privateSpendKey, material.privateViewKey, request.restoreHeight, control);
+    control?.signal?.throwIfAborted();
     if (diagnosticMemory) console.log('[monero-wasm] balance memory after scan:', diagnosticMemory.buffer.byteLength);
     return { ok: true, balanceAtomic };
   } catch (error) {
