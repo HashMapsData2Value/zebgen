@@ -22,17 +22,21 @@ test('website builds from source and brand assets without installed packages', a
       'scripts/build-site.mjs', 'site/index.html', 'site/style.css', 'site/wallet-theme.css', 'site/main.js',
       'assets/algorand_logo.png', 'assets/monero_logo.png', 'public/icon/128.png',
       'assets/brand/zebgen-mark-violet-128.png', 'assets/brand/zebgen-mark-luminous.svg',
+      'assets/brand/zebgen-mark-violet.svg', 'assets/brand/zebgen-mark-violet-32.png',
       'site/assets/wallet-preview.png',
     ]) {
       await cp(new URL(file, root), path.join(directory, file));
     }
     execFileSync(process.execPath, ['scripts/build-site.mjs'], { cwd: directory });
     const output = path.join(directory, 'site-dist');
-    assert.deepEqual((await readdir(output)).sort(), ['assets', 'index.html', 'main.js', 'style.css', 'wallet-theme.css']);
+    assert.deepEqual((await readdir(output)).sort(), ['assets', 'favicon-32.png', 'favicon.svg', 'index.html', 'main.js', 'style.css', 'wallet-theme.css']);
     const theme = await readFile(path.join(output, 'wallet-theme.css'), 'utf8');
     assert.ok(theme.includes('background: #04020b'));
     assert.ok(theme.includes("font-family: 'Space Grotesk'"));
     const html = await readFile(path.join(output, 'index.html'), 'utf8');
+    assert.ok(html.includes('href="/favicon.svg?v=2"'));
+    assert.ok(html.includes('href="/favicon-32.png?v=2"'));
+    assert.ok((await readFile(path.join(output, 'favicon.svg'), 'utf8')).includes('#be9dff'));
     for (const asset of ['zebgen.png', 'algorand.png', 'monero.png', 'wallet-preview.png']) {
       assert.ok((await readFile(path.join(output, 'assets', asset))).length > 0);
       assert.ok(html.includes(`/assets/${asset}`));
