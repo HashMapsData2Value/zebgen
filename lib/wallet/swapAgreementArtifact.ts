@@ -1,8 +1,8 @@
 import algosdk from 'algosdk';
 import { bytesToHex } from '@noble/hashes/utils.js';
-import artifact from '../../../leakswap-all/leakswap-protocol/algorand/projects/algorand/smart_contracts/artifacts/leak_swap/LeakSwap.arc56.json';
-import sponsorTemplate from '../../../leakswap-all/leakswap-protocol/algorand/projects/algorand/smart_contracts/artifacts/leak_swap/FeeSponsorLSig.teal?raw';
-import type { SwapAgreement } from '../../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapAgreement';
+import artifact from '../contracts/LeakSwap.arc56.json';
+import sponsorTemplate from '../contracts/FeeSponsorLSig.teal?raw';
+import type { SwapAgreement } from 'leakswap-utils/dist/swapAgreement.js';
 import { bytesToBase64, base64ToBytes } from '../provider/base64';
 
 export function assertAgreementPrograms(approval: Uint8Array, clear: Uint8Array): void {

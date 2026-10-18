@@ -1,5 +1,5 @@
 import { KeyContext, XHDWalletAPI } from '@algorandfoundation/xhd-wallet-api';
-import { handshakeSigningBytes, type Handshake } from '../../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapHandshake.ts';
+import { handshakeSigningBytes, type Handshake } from 'leakswap-utils/dist/swapHandshake.js';
 
 export async function signCanonicalSwapHandshake(root: Uint8Array, message: Omit<Handshake, 'signature'>): Promise<Uint8Array> {
   if (!message || typeof message !== 'object' || Array.isArray(message)

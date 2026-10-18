@@ -1,5 +1,5 @@
 import { fromSeed, KeyContext, XHDWalletAPI } from '@algorandfoundation/xhd-wallet-api';
-import type { Handshake } from '../../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapHandshake';
+import type { Handshake } from 'leakswap-utils/dist/swapHandshake.js';
 import { signCanonicalSwapHandshake } from './swapHandshakeSigning';
 import * as bip39 from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';

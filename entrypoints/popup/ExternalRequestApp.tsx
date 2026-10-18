@@ -22,7 +22,7 @@ import { getMoneroWalletState, loadMoneroCombinedContext, saveMoneroCombinedCont
 import { combinePrivateSpendKeys, computeCombinedAddressWithPrivateAndPublic } from '../../lib/wallet/moneroWallet';
 import type { ZebgenSaveLeakSwapParams } from '../../lib/provider/types';
 import { createSwapInvite, acceptSwapInvite, confirmSwapAcceptance, type SwapInviteTerms } from '../../lib/wallet/swapHandshakeVault';
-import { parseHandshakeLink, verifyHandshake, type SignedOffer } from '../../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapHandshake';
+import { parseHandshakeLink, verifyHandshake, type SignedOffer } from 'leakswap-utils/dist/swapHandshake.js';
 
 interface ExternalRequestAppProps {
   requestId: string;

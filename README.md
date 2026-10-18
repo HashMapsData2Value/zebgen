@@ -69,6 +69,20 @@ landing/download page. DNS and hosting must be configured separately.
 
 ### Local development and browser tests
 
+Install the npm dependencies before compiling or building:
+
+```sh
+npm ci
+npm run compile
+```
+
+Protocol utilities come from the npm dependency `leakswap-utils` (`>=1.2.0`).
+The range allows newer major versions too. Run `npm update leakswap-utils` to
+resolve a newer release, validate it, and commit the updated lockfile; `npm ci`
+reproduces the reviewed lockfile rather than silently updating dependencies.
+No sibling checkout or Git submodule is required. Contract artifacts not shipped
+in that package are pinned locally in `lib/contracts`; see its provenance notes.
+
 `npm run dev` enables provider access on `http://localhost/*` and
 `http://127.0.0.1/*`, in addition to the production swap domain. For local
 browser tests, run `npm run build:e2e`; the test helpers load

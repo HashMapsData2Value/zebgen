@@ -1,6 +1,6 @@
 import algosdk from 'algosdk';
 import { bytesToHex } from '@noble/hashes/utils.js';
-import { assertAgreementState, assertAgreementFunding, type SwapAgreement } from '../../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapAgreement.ts';
+import { assertAgreementState, assertAgreementFunding, type SwapAgreement } from 'leakswap-utils/dist/swapAgreement.js';
 import { bytesToBase64 } from '../provider/base64.ts';
 
 export function checkAgreementTransaction(txn: algosdk.Transaction, agreement: SwapAgreement, moneroNetwork: string): void {

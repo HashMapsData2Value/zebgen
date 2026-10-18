@@ -74,16 +74,16 @@ export default defineContentScript({
 interface ZebgenProvider {
   isZebgen: true;
   confirmSwapAcceptance: (params: { link: string }) => Promise<{
-    offer: import('../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapHandshake').SignedOffer;
-    acceptance: import('../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapHandshake').SignedAcceptance;
+    offer: import('leakswap-utils/dist/swapHandshake.js').SignedOffer;
+    acceptance: import('leakswap-utils/dist/swapHandshake.js').SignedAcceptance;
   }>;
   createSwapInvite: (params: { algoAmount: string; xmrAmount: string; t0: number; t1: number }) => Promise<{
-    offer: import('../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapHandshake').SignedOffer;
+    offer: import('leakswap-utils/dist/swapHandshake.js').SignedOffer;
     offerDigest: string; link: string;
   }>;
   acceptSwapInvite: (params: { link: string }) => Promise<{
-    offer: import('../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapHandshake').SignedOffer;
-    acceptance: import('../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapHandshake').SignedAcceptance; link: string;
+    offer: import('leakswap-utils/dist/swapHandshake.js').SignedOffer;
+    acceptance: import('leakswap-utils/dist/swapHandshake.js').SignedAcceptance; link: string;
   }>;
   saveLeakSwap: (params: ZebgenSaveLeakSwapParams) => Promise<{ appId: string }>;
   listLeakSwaps: () => Promise<{ swaps: ZebgenSavedLeakSwap[] }>;

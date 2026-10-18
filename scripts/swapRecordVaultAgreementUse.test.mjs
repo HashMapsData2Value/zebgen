@@ -8,7 +8,7 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 import * as seedVault from '../lib/wallet/seedVault.ts';
 import * as agreementUse from '../lib/wallet/swapAgreementUse.ts';
 import * as transactions from '../lib/wallet/swapAgreementTransactions.ts';
-import { assertAgreementState } from '../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapAgreement.ts';
+import { assertAgreementState } from 'leakswap-utils/dist/swapAgreement.js';
 
 const source = readFileSync(new URL('../lib/wallet/swapRecordVault.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS,
@@ -74,7 +74,7 @@ function harness(locksAvailable = true) {
       return { matureAtomic: '0' };
     } },
     './swapHandshakeVault': { loadAcceptedSwap: async () => agreement },
-    '../../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapAgreement': { assertAgreementState },
+    'leakswap-utils/dist/swapAgreement.js': { assertAgreementState },
     './swapAgreementTransactions': transactions,
     './swapAgreementArtifact': { assertAgreementPrograms: () => {}, agreementSponsorAddress: async () => xin.addr.toString() },
     './swapRecords': { listSwapRecords: async () => saved, listSignedTransactions: async () => [], swapRecordKey: () => 'saved-swap',

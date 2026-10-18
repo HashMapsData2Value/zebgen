@@ -1,8 +1,8 @@
 import algosdk from 'algosdk';
-import { verifySwapAgreement, type SwapAgreement } from '../../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapAgreement';
+import { verifySwapAgreement, type SwapAgreement } from 'leakswap-utils/dist/swapAgreement.js';
 import { browser } from 'wxt/browser';
 import { canonicalOffer, buildHandshakeUrl, offerDigest, parseHandshakeLink, verifyHandshake,
-  type SignedOffer, type SignedAcceptance } from '../../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapHandshake';
+  type SignedOffer, type SignedAcceptance } from 'leakswap-utils/dist/swapHandshake.js';
 import { getNetworkSettings } from '../network/networkStore';
 import { verifyAlgorandGenesis } from '../network/chainIdentity';
 import { bytesToBase64 } from '../provider/base64';

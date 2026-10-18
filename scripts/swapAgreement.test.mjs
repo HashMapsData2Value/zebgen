@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import algosdk from 'algosdk';
 import { checkAgreementTransaction, checkAgreementEscrowPayment } from '../lib/wallet/swapAgreementTransactions.ts';
-import { assertAgreementState, assertAgreementFunding } from '../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapAgreement.ts';
+import { assertAgreementState, assertAgreementFunding } from 'leakswap-utils/dist/swapAgreement.js';
 
 const agreement = { offer: { payload: { algoGenesisHash: 'genesis', moneroNetwork: 'regtest', aliAlgoAddress: 'ali', aliPublicSpendKey: 'ali-key', t0: 200, t1: 300, algoAmount: '10000000' } },
   acceptance: { payload: { xinAlgoAddress: 'xin', xinPublicSpendKey: 'xin-key' } } };

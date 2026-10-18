@@ -10,7 +10,7 @@ import { getMoneroWalletState, loadMoneroCombinedContext, saveMoneroCombinedCont
 import { computeCombinedAddressWithPrivateAndPublic, combinePrivateSpendKeys } from './moneroWallet';
 import { scanMoneroFunding, type MoneroFundingControl } from '../monero/moneroDaemon';
 import { loadAcceptedSwap } from './swapHandshakeVault';
-import { assertAgreementState } from '../../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapAgreement';
+import { assertAgreementState } from 'leakswap-utils/dist/swapAgreement.js';
 import { checkAgreementTransaction, checkAgreementEscrowPayment } from './swapAgreementTransactions';
 import type { ZebgenSignAlgorandTransactionsParams } from '../provider/types';
 import { agreementSponsorAddress, assertAgreementPrograms } from './swapAgreementArtifact';

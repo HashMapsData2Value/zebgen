@@ -29,7 +29,7 @@ export interface ZebgenSaveLeakSwapParams {
 }
 
 export interface ZebgenSavedLeakSwap {
-  agreement?: import('../../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapAgreement').SwapAgreement;
+  agreement?: import('leakswap-utils/dist/swapAgreement.js').SwapAgreement;
   appId: string;
   appAddress: string;
   genesisHash: string;

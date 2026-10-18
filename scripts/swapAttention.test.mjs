@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { swapAttention, refundDecisionMargin, deadlineRemaining } from '../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapAttention.ts';
+import { swapAttention, refundDecisionMargin, deadlineRemaining } from 'leakswap-utils/dist/swapAttention.js';
 
 test('preset margins and custom heuristic match decision guidance', () => {
   assert.equal(refundDecisionMargin(10000, 17200), 1800);

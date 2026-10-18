@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fromSeed, KeyContext, XHDWalletAPI, Encoding } from '@algorandfoundation/xhd-wallet-api';
 import { signCanonicalSwapHandshake } from '../lib/wallet/swapHandshakeSigning.ts';
-import { buildHandshakeUrl, parseHandshakeLink, encodeHandshake, decodeHandshake, handshakeSigningBytes, offerDigest, verifyHandshake } from '../../leakswap-all/leakswap-protocol/leakswap-utils/src/swapHandshake.ts';
+import { buildHandshakeUrl, parseHandshakeLink, encodeHandshake, decodeHandshake, handshakeSigningBytes, offerDigest, verifyHandshake } from 'leakswap-utils/dist/swapHandshake.js';
 
 const offer = { offerId: 'ab'.repeat(16), createdAt: 100, algoGenesisHash: 'A'.repeat(43) + '=',
   moneroNetwork: 'regtest', algoAmount: '10000000', xmrAmount: '1000000000000', t0: 200, t1: 300,
