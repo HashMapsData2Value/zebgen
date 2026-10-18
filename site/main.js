@@ -1,0 +1,73 @@
+const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+
+const chainScene = document.querySelector('.chain-strip-inner');
+if (chainScene) {
+  const networks = [...chainScene.querySelectorAll(':scope > div')];
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  let targetX = 0;
+  let targetY = 0;
+  let currentX = 0;
+  let currentY = 0;
+  let frame = 0;
+  function animateNetworks() {
+    frame = 0;
+    if (reducedMotion.matches) return;
+    currentX += (targetX - currentX) * 0.08;
+    currentY += (targetY - currentY) * 0.08;
+    networks.forEach((network, index) => {
+      const depth = index === 0 ? 1 : 0.65;
+      network.style.setProperty('--chain-x', `${currentX * depth}px`);
+      network.style.setProperty('--chain-y', `${currentY * depth}px`);
+    });
+    if (Math.abs(targetX - currentX) + Math.abs(targetY - currentY) > 0.05) {
+      frame = requestAnimationFrame(animateNetworks);
+    }
+  }
+  function moveNetworks(horizontal, vertical) {
+    targetX = horizontal;
+    targetY = vertical;
+    if (!frame) frame = requestAnimationFrame(animateNetworks);
+  }
+  chainScene.addEventListener('pointermove', event => {
+    if (reducedMotion.matches || (event.pointerType === 'touch' && !event.buttons)) return;
+    const bounds = chainScene.getBoundingClientRect();
+    moveNetworks(((event.clientX - bounds.left) / bounds.width - 0.5) * 48,
+      ((event.clientY - bounds.top) / bounds.height - 0.5) * 28);
+  });
+  for (const eventName of ['pointerleave', 'pointerup', 'pointercancel']) {
+    chainScene.addEventListener(eventName, () => moveNetworks(0, 0));
+  }
+  reducedMotion.addEventListener('change', () => {
+    cancelAnimationFrame(frame);
+    frame = 0;
+    currentX = currentY = 0;
+    networks.forEach(network => {
+      network.style.removeProperty('--chain-x');
+      network.style.removeProperty('--chain-y');
+    });
+  });
+}
+
+function selectTab(selected) {
+  for (const tab of tabs) {
+    const active = tab === selected;
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
+    document.getElementById(tab.getAttribute('aria-controls')).hidden = !active;
+  }
+}
+
+for (const tab of tabs) {
+  tab.addEventListener('click', () => selectTab(tab));
+  tab.addEventListener('keydown', event => {
+    const index = tabs.indexOf(tab);
+    let next;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') next = tabs[(index + 1) % tabs.length];
+    if (event.key === 'Home') next = tabs[0];
+    if (event.key === 'End') next = tabs[tabs.length - 1];
+    if (!next) return;
+    event.preventDefault();
+    selectTab(next);
+    next.focus();
+  });
+}

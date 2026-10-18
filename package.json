@@ -8,6 +8,8 @@
     "dev": "wxt",
     "dev:firefox": "wxt -b firefox",
     "build": "wxt build",
+    "build:site": "node scripts/build-site.mjs",
+    "test:site": "node --test scripts/site.test.mjs",
     "build:firefox": "wxt build -b firefox",
     "zip": "wxt zip",
     "zip:firefox": "wxt zip -b firefox",
