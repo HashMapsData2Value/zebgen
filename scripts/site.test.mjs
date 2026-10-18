@@ -5,6 +5,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
+test('Workers uploads the built site including generated logo assets', async () => {
+  const config = JSON.parse(await readFile(new URL('../wrangler.jsonc', import.meta.url), 'utf8'));
+  assert.equal(config.assets.directory, './site-dist');
+  assert.equal(config.name, 'zebgen');
+});
+
 test('website builds from source and brand assets without installed packages', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'zebgen-site-build-'));
   const root = new URL('../', import.meta.url);
