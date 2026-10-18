@@ -5,14 +5,18 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 
 const source = readFileSync(new URL('../lib/network/networks.ts', import.meta.url), 'utf8');
-const compiled = ts.transpileModule(source, { compilerOptions: {
-  module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
-} }).outputText;
+const compiled = ts.transpileModule(source, {
+  compilerOptions: {
+    module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
+  }
+}).outputText;
 const api = {};
-runInNewContext(compiled, { exports: api, require: name => {
-  assert.equal(name, '../wallet/moneroWallet');
-  return { MoneroNetworkType: { MAINNET: 0, TESTNET: 1, STAGENET: 2 } };
-} });
+runInNewContext(compiled, {
+  exports: api, require: name => {
+    assert.equal(name, '../wallet/moneroWallet');
+    return { MoneroNetworkType: { MAINNET: 0, TESTNET: 1, STAGENET: 2 } };
+  }
+});
 const { ALGORAND_NETWORK_IDS, MONERO_NETWORK_IDS, networkColor } = api;
 
 test('Monero choices exclude Testnet without changing Algorand choices', () => {

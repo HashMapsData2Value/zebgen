@@ -5,9 +5,11 @@ import { readSwapChainStatus } from '../lib/wallet/swapChainStatus.ts';
 
 const ali = algosdk.generateAccount();
 const xin = algosdk.generateAccount();
-const record = { appId: '123', appAddress: algosdk.getApplicationAddress(123n).toString(), role: 'ali',
+const record = {
+  appId: '123', appAddress: algosdk.getApplicationAddress(123n).toString(), role: 'ali',
   genesisHash: 'saved-genesis', aliAddress: ali.addr.toString(), xinAddress: xin.addr.toString(),
-  t0: 10000, t1: 17200, context: { network: 'stagenet' } };
+  t0: 10000, t1: 17200, context: { network: 'stagenet' }
+};
 const uint = (key, value) => ({ key: new TextEncoder().encode(key), value: { type: 2, uint: BigInt(value), bytes: new Uint8Array() } });
 const address = (key, value) => ({ key: new TextEncoder().encode(key), value: { type: 1, uint: 0n, bytes: value.publicKey } });
 const globals = ready => [uint('t0', 10000), uint('t1', 17200), uint('aliReady', ready), address('aliAlgoAddr', ali.addr), address('xinAlgoAddr', xin.addr)];

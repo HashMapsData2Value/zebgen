@@ -24,10 +24,10 @@ export interface ScanMoneroBalanceMessage {
 }
 
 export type BackgroundMessage = ProbeMoneroDaemonMessage | ScanMoneroBalanceMessage |
-  { type: 'wallet:transactionStatus'; request: TransactionStatusRequest } |
-  { type: 'wallet:prepareTransaction'; request: PrepareTransactionRequest } |
-  { type: 'wallet:submitTransaction'; id: string; lockSecret: string } |
-  { type: 'wallet:discardTransactions' };
+{ type: 'wallet:transactionStatus'; request: TransactionStatusRequest } |
+{ type: 'wallet:prepareTransaction'; request: PrepareTransactionRequest } |
+{ type: 'wallet:submitTransaction'; id: string; lockSecret: string } |
+{ type: 'wallet:discardTransactions' };
 
 export function prepareTransactionViaBackground(request: PrepareTransactionRequest): Promise<TransactionResponse> {
   return browser.runtime.sendMessage({ type: 'wallet:prepareTransaction', request });

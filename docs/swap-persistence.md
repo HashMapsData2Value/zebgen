@@ -1,6 +1,7 @@
 # Durable LeakSwap Records
 
-Zebgen stores two versioned, password-encrypted record types in extension local
+Zebgen stores versioned, password-encrypted swap records, signing journals and
+verified settlement evidence in extension local
 storage. These survive page refresh and browser restart, but not profile deletion
 or extension removal. There is no portable export/import backup yet.
 
@@ -45,10 +46,85 @@ wallets and exact network identity. Loading does not require the app to exist.
 Current status still requires chain reconciliation; stored signed references are
 shown explicitly as unconfirmed references.
 
+Confirmed claim/refund outcomes are stored on the encrypted swap record with
+their transaction ID and confirmed round. After settlement the page requests a
+Save Confirmed Swap Settlement approval. Zebgen verifies the transaction's
+genesis, app, sender, deletion call, method and (for leaky calls) signature, without
+querying the deleted application. A stored terminal outcome cannot be replaced
+or cleared by a stale save. Signing alone never marks a swap complete.
+
+When loading an older saved swap, Zebgen reconciles its journaled settlement
+references against algod and saves any verified terminal outcome. Unavailable
+history is logged and leaves the result unverified, not completed. Resuming a
+verified claim shows ALGO claimed and contract deleted, rather than prompting
+Xin to wait for deployment or deposit again.
+
+The wallet dashboard refreshes its public Monero inventory on focus/visibility
+return, including wallets saved through a separate approval window. Recovery
+does not automatically activate the added wallet.
+
 Inside Zebgen's Monero LeakSwap view, saved identities and signed references can
-be inspected offline after unlocking. Recovery still uses the context-bound
-manual leaked-key form. Settlement-ID recovery and archival discovery are not
-implemented.
+be inspected offline after unlocking. The context-bound manual leaked-key form
+remains available.
+
+## Recover After Settlement
+
+LeakSwap keeps Claim XMR (Ali) and Recover XMR (Xin) available for a saved app,
+independent of live application state. Approving `recoverLeakSwapMonero` searches
+the configured indexer for settlement references and verifies candidates through
+algod. If the localnet indexer is unavailable, Zebgen scans at most 2,048 recent
+local blocks. A confirmed transaction ID can also be supplied directly. Older
+local history and unavailable remote indexers require that reference; no large
+remote block scan is started automatically.
+
+Recovery checks exact genesis, app ID, counterparty sender, deletion completion,
+ABI method, confirmed round, signature encoding, fixed nonce, signature validity
+and recovered public key. Ali needs Xin's leaky claim; Xin needs Ali's leaky
+refund. App deletion or a punish refund alone is not sufficient. The recovered
+combined address must match the authenticated encrypted context.
+
+The original wallet/share remains required. Private spend keys never return to
+the page. Zebgen encrypts the recovered wallet using the saved restore height,
+reuses an existing matching wallet, and does not switch active accounts or send
+funds. Select the recovered Monero wallet in Zebgen to scan and spend. The saved
+record and original context must survive; this is not recovery from profile loss.
+
+## Advanced Recovery And Support
+
+In Zebgen's LeakSwap view, expand **Advanced recovery and support records** and
+load the saved records. This works without the LeakSwap page or a live application.
+Select a record to inspect its application ID/address, genesis hash, party addresses,
+combined Monero address, network, restore height, agreement digest, deadlines,
+verified settlement reference and matching locally signed transaction references.
+The journal records signing, not submission or confirmation. A deployment signed
+before its application ID was assigned remains in the journal but is not automatically
+associated with this per-application report. Monero deposit history is separate.
+
+Export support report downloads an allowlisted JSON report. It excludes mnemonic,
+private spend keys, private view keys and raw transaction arguments, which can contain
+leaked shares. It still links public identities: obtain user consent before sharing.
+This report is not a wallet backup. Never ask a user to send their mnemonic, password,
+private view key, leaked scalar or decrypted wallet context to support.
+
+The manual settlement transaction ID field bypasses history discovery, not validation.
+Use the original Algorand account and matching networks. Zebgen verifies the same
+chain/application/sender/confirmation/signature/address bindings as ordinary recovery.
+The existing context-bound manual leaked-key form is also available separately;
+never paste a leaked scalar into a support ticket.
+
+After successful settlement verification, Zebgen encrypts and saves the transaction
+bytes, transaction ID and confirmed round before saving the recovered wallet. Later
+attempts can revalidate this retained evidence without querying settlement history.
+Evidence is immutable and bound to the saved swap. Chain identity and the original
+wallet/share are still required. The configured node is trusted for the initial
+confirmation observation; this is not an independently verified consensus proof.
+
+Before the first successful lookup, an unavailable indexer or pruned history still
+requires a settlement reference and a node that serves it. Capturing evidence is not
+a background watchtower while Zebgen is locked or the browser is closed. Profile loss
+remains unrecoverable without an external wallet/context backup, which is not yet
+implemented. Do not clear browser storage or reinstall the extension when investigating
+an incomplete swap.
 
 ## Authenticated Handshakes
 
@@ -72,8 +148,38 @@ added. Tests compare both signing paths byte-for-byte and verify that handshake
 signing still works when `signData` is disabled.
 
 Links share private view keys, never private spend keys. Fragments are visible to
-the recipient and page JavaScript. Use dedicated swap wallets for privacy.
+the recipient and page JavaScript. New approvals create dedicated swap shares;
+they do not use the normal funding wallet's private view key.
 Creating or accepting a link authenticates terms; it does not transfer funds.
+
+## Dedicated Key Shares
+
+Explicitly approved `createSwapInvite` and `acceptSwapInvite` operations generate
+fresh Monero key material and encrypt it in a separate `leakswapShare:` vault
+before returning signed links. Acceptance retries reuse the exact saved share,
+including after restart or concurrent requests. Existing legacy acceptances are
+returned without replacing their keys. Each share binds the offer digest, exact
+Algorand genesis hash and derived account identity, and Monero network (including
+the mainnet/regtest distinction).
+
+Shares have negative context IDs, separate from positive normal-wallet database
+IDs. Unlocking a share verifies its identity and networks without changing normal
+wallet metadata. They appear only in LeakSwap's key-share inventory, with no
+receive address, send controls or generic payment capability. They are not normal
+funding wallets. Existing wallets, contexts and legacy agreements are retained.
+
+The provider's share-info, combined-address, scan and leaky-signature requests
+carry `agreementDigest`; the wallet resolves the encrypted accepted record and
+its own share, never a global selected-share pointer. Combined operations enforce
+the signed counterparty keys. Leaky signing also requires `agreementAppId` and
+verifies the application and exact message address. Saving, listing, readiness
+checks and context-bound recovery use the same share identity. Legacy agreements
+continue to use their original selected normal wallet.
+
+Share secrets are not returned in the inventory or sent to the page. Like existing
+encrypted records, shares survive restarts but not profile deletion or extension
+removal. Portable backup/export is not implemented. No storage reset or migration
+is performed.
 
 ## Agreement-Bound Execution
 
@@ -113,6 +219,45 @@ The configured daemon remains trusted for its chain height and chain data.
 These remain view-only received totals, not
 proof that outputs are unspent. Generic Monero sends are not restricted to an
 agreement amount or recipient.
+
+## Monero Balance Checkpoints And Activity
+
+The unlocked-balance view encrypts its last verified total, scan height and time.
+Storage keys are hashed and scoped to wallet address, network, daemon and restore
+height. Reopening restores that observation immediately and checks the daemon
+height. New blocks trigger another balance scan for short wallet histories;
+histories exceeding 5,000 blocks require explicit refresh to avoid repeated large
+downloads. Failed refreshes retain the last observation, not a claimed live total.
+
+This is snapshot persistence, not incremental output scanning. Published
+`zebgen-monero-wasm` 0.4.0 returns only an aggregate unlocked balance. A correct
+incremental implementation needs a persistent output ledger, spent-key-image
+checks, maturity updates and reorg reconciliation in the scanner. Advancing the
+restore height and adding new totals would miss old spends and maturity changes.
+
+New outgoing Monero transactions journal encrypted hash, amount, fee, wallet,
+network, daemon and relay outcome before broadcast. The overview reloads these
+records after navigation/restart and checks the daemon for pool or block inclusion.
+Uncertain outcomes are not failures and are never automatically retried. This
+does not reconstruct transactions sent before journaling was introduced, or
+provide incoming transaction history. Raw transactions and private keys are not
+stored in activity records.
+
+## Deposit With Zebgen
+
+`depositLeakSwapMonero({ agreementDigest, appId })` opens an explicit review.
+Zebgen derives the destination and exact amount from its accepted agreement,
+verifies the supported application, ALGO funding and deposit deadline, and uses
+the active normal Monero wallet, never a dedicated swap share. The user prepares,
+reviews the fee and confirms Send with a fresh password/PIN. Relay is not
+confirmation; the page and wallet show the hash for subsequent status checks.
+
+An encrypted reservation bound to agreement, application, genesis and Monero
+network is saved before relay under a cross-context lock. Existing relaying,
+submitted or unknown attempts prevent another provider deposit, including after
+restart. There is no automatic reset for uncertain outcomes. Keep extension
+storage intact and reconcile activity before taking any manual recovery action.
+Other wallets remain supported through the displayed address and copy control.
 
 ## Checks
 

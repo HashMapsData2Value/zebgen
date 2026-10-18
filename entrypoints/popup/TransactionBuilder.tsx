@@ -2,6 +2,8 @@ import { FormEvent, useEffect, useRef, useState } from 'react';
 
 import { discardTransactionsViaBackground, prepareTransactionViaBackground, submitTransactionViaBackground, scanMoneroBalanceViaBackground, transactionStatusViaBackground } from '../../lib/network/messages';
 import ScanActivity from './ScanActivity';
+import MoneroChainHeight from './MoneroChainHeight';
+import MoneroConfirmation from './MoneroConfirmation';
 import type { TransactionStatus } from '../../lib/wallet/transactionStatus';
 import { getAlgoBalance } from '../../lib/algorand/algodClient';
 import { RefreshCw } from 'lucide-react';
@@ -12,6 +14,7 @@ import type { TransactionReview } from '../../lib/wallet/transactionService';
 import { formatAtomic } from '../../lib/wallet/formatAtomic';
 import CopyValue from './CopyValue';
 import { addressValidationError } from '../../lib/wallet/addressValidation';
+import { balanceCheckpointKey, loadBalanceCheckpoint } from '../../lib/wallet/moneroBalanceCache';
 
 function parseUnits(value: string, decimals: number, allowZero = false): bigint {
   const normalized = value.trim();
@@ -70,6 +73,7 @@ function TransactionBuilder(props: TransactionBuilderProps) {
   const [receiptStatus, setReceiptStatus] = useState<TransactionStatus | null>(null);
   const [receiptError, setReceiptError] = useState<string | null>(null);
   const [receiptRefresh, setReceiptRefresh] = useState(0);
+  const [sentAmount, setSentAmount] = useState<string | null>(null);
   const balanceGeneration = useRef(0);
   const balanceController = useRef<AbortController | null>(null);
   const balanceKey = JSON.stringify(props.chain === 'algorand'
@@ -83,7 +87,16 @@ function TransactionBuilder(props: TransactionBuilderProps) {
     setBalance(null);
     setBalanceError(null);
     setBalanceBusy(false);
-    if (props.chain !== 'algorand') return () => { balanceGeneration.current += 1; balanceController.current?.abort(); };
+    if (props.chain === 'monero') {
+      void loadBalanceCheckpoint(balanceCheckpointKey(props.config.network, props.config.daemon.uri, props.sender, Number(restoreHeight)), props.lockSecret)
+        .then(checkpoint => {
+          if (active && checkpoint) setBalance({ key: balanceKey, atomic: checkpoint.balanceAtomic });
+        }).catch(failure => {
+          console.error('Unable to restore send balance', failure);
+          if (active) setBalanceError('Saved balance unavailable. Transaction review will check spendable funds.');
+        });
+      return () => { active = false; balanceGeneration.current += 1; balanceController.current?.abort(); };
+    }
     async function refresh() {
       if (props.chain !== 'algorand') return;
       const result = await getAlgoBalance(props.endpoint, props.sender, props.network);
@@ -141,8 +154,7 @@ function TransactionBuilder(props: TransactionBuilderProps) {
   if (amount.trim() && !isSweep) {
     try {
       const units = parseUnits(amount, decimals, props.chain === 'algorand');
-      if (available !== null && (props.chain === 'algorand'
-        ? units + 1000n > BigInt(available) : units >= BigInt(available))) {
+      if (available !== null && props.chain === 'algorand' && units + 1000n > BigInt(available)) {
         amountError = `Insufficient funds. ${formatAtomic(available, decimals)} ${symbol} available before transaction fees${props.chain === 'algorand' ? ' (account minimum reserved)' : ' (unlocked)'}.`;
       }
     } catch (failure) {
@@ -164,8 +176,10 @@ function TransactionBuilder(props: TransactionBuilderProps) {
       if (!/^\d+$/.test(restoreHeight) || !Number.isSafeInteger(height)) throw new Error('Enter a non-negative restore height.');
       await ensureHostPermissions([props.config.daemon.uri]);
       controller.signal.throwIfAborted();
-      const response = await scanMoneroBalanceViaBackground({ config: props.config, primaryAddress: sender,
-        walletId: props.walletId, lockSecret: props.lockSecret, restoreHeight: height }, { signal: controller.signal });
+      const response = await scanMoneroBalanceViaBackground({
+        config: props.config, primaryAddress: sender,
+        walletId: props.walletId, lockSecret: props.lockSecret, restoreHeight: height
+      }, { signal: controller.signal });
       controller.signal.throwIfAborted();
       if (!response.ok || response.balanceAtomic === undefined) throw new Error(response.error ?? 'Unable to scan balance.');
       if (generation === balanceGeneration.current) setBalance({ key: balanceKey, atomic: response.balanceAtomic });
@@ -214,8 +228,10 @@ function TransactionBuilder(props: TransactionBuilderProps) {
           throw new Error('Restore height must be a non-negative integer.');
         }
       }
-      const common = { primaryAddress: sender, recipient: recipient.trim(),
-        amountAtomic: isSweep ? '0' : parseUnits(amount, decimals, props.chain === 'algorand').toString(), lockSecret: props.lockSecret };
+      const common = {
+        primaryAddress: sender, recipient: recipient.trim(),
+        amountAtomic: isSweep ? '0' : parseUnits(amount, decimals, props.chain === 'algorand').toString(), lockSecret: props.lockSecret
+      };
       const response = await prepareTransactionViaBackground(props.chain === 'algorand' ?
         { ...common, chain: 'algorand', addressIndex: props.addressIndex, endpoint: props.endpoint, network: props.network, note } :
         { ...common, chain: 'monero', walletId: props.walletId, config: props.config, restoreHeight: Number(restoreHeight), sweep: sendAll });
@@ -242,6 +258,16 @@ function TransactionBuilder(props: TransactionBuilderProps) {
       const secret = approvalSecret;
       setApprovalSecret('');
       const sent = await submitTransactionViaBackground(prepared.id, secret);
+      if (sent.review) setSentAmount(sent.review.amountAtomic);
+      if (!sent.ok && sent.uncertain && sent.review) {
+        setTransactionId(sent.review.hash);
+        setPrepared(null);
+        setIsReviewing(false);
+        setResult(`Relay outcome unknown for ${sent.review.hash}. Check outgoing activity before creating another payment.`);
+        setError(sent.error);
+        setBalance(null);
+        return;
+      }
       if (!sent.ok) throw new Error(sent.error);
       setBalance(null);
       setResult(`${props.chain === 'algorand' ? 'Submitted' : 'Relayed'} ${sent.review.hash} · amount ${formatAtomic(sent.review.amountAtomic, decimals)} ${symbol} · fee ${formatAtomic(sent.review.feeAtomic, decimals)} ${symbol}`);
@@ -265,83 +291,87 @@ function TransactionBuilder(props: TransactionBuilderProps) {
       {result ? null : !isReviewing ? (
         <form className="import-form" onSubmit={onReview}>
           <fieldset className="transaction-fields" disabled={isSubmitting}>
-          <label htmlFor={`${props.chain}-tx-recipient`}>Recipient</label>
-          <input
-            id={`${props.chain}-tx-recipient`}
-            data-address-status={recipientStatus}
-            aria-invalid={recipientStatus === 'invalid'}
-            aria-describedby={recipientStatus ? `${props.chain}-recipient-feedback` : undefined}
-            value={recipient}
-            onChange={(event) => {
-              setRecipient(event.target.value);
-              resetReview();
-            }}
-            placeholder={`${symbol} address`}
-            autoComplete="off"
-            required
-          />
-          {recipientStatus ? <p id={`${props.chain}-recipient-feedback`} className={recipientError ? 'error' : 'probe-ok'} role={recipientError ? 'alert' : 'status'}>
-            {recipientError ?? (props.chain === 'monero' ? 'Valid address for the selected Monero network.' : 'Valid Algorand address checksum. Confirm the recipient uses the selected network.')}
-          </p> : null}
-          <label htmlFor={`${props.chain}-tx-amount`}>Amount ({symbol})</label>
-          <input
-            id={`${props.chain}-tx-amount`}
-            data-address-status={amountError ? 'invalid' : undefined}
-            aria-invalid={!!amountError}
-            aria-describedby={`${props.chain}-amount-feedback`}
-            value={amount}
-            onChange={(event) => {
-              setAmount(event.target.value);
-              resetReview();
-            }}
-            placeholder="0.0"
-            inputMode="decimal"
-            required={!isSweep}
-            disabled={isSweep}
-          />
-          <div id={`${props.chain}-amount-feedback`}>
-            {amountError ? <p className="error" role="alert">{amountError}</p> : null}
-            {available !== null ? <p className="hint" role="status">Available before fees: {formatAtomic(available, decimals)} {symbol}{props.chain === 'algorand' ? ' (account minimum reserved)' : ' (unlocked)'}</p> :
-              !balanceBusy ? <p className="hint" role="status">Available balance not checked.</p> : null}
-            {props.chain === 'monero' && (balanceBusy || isSubmitting) ? <ScanActivity restoreHeight={Number(restoreHeight)} onStop={balanceBusy ? stopBalanceScan : undefined} /> : null}
-            {props.chain === 'monero' ? <button type="button" className="refresh-btn" title="Scan unlocked balance" aria-label="Scan unlocked balance" disabled={balanceBusy} onClick={checkMoneroBalance}><RefreshCw size={16} className={balanceBusy ? 'is-spinning' : ''} /></button> : null}
-            {balanceError ? <p className="error" role="alert">{balanceError}</p> : null}
-          </div>
-          {props.chain === 'algorand' ? (
-            <>
-              <label htmlFor="algorand-tx-note">Note (optional)</label>
-              <input id="algorand-tx-note" value={note} onChange={(event) => setNote(event.target.value)} maxLength={1024} />
-            </>
-          ) : (
-            <>
-              <label className="checkbox-label" htmlFor="monero-tx-send-all">
+            <label htmlFor={`${props.chain}-tx-recipient`}>Recipient</label>
+            <input
+              id={`${props.chain}-tx-recipient`}
+              data-address-status={recipientStatus}
+              aria-invalid={recipientStatus === 'invalid'}
+              aria-describedby={recipientStatus ? `${props.chain}-recipient-feedback` : undefined}
+              value={recipient}
+              onChange={(event) => {
+                setRecipient(event.target.value);
+                resetReview();
+              }}
+              placeholder={`${symbol} address`}
+              autoComplete="off"
+              required
+            />
+            {recipientStatus ? <p id={`${props.chain}-recipient-feedback`} className={recipientError ? 'error' : 'probe-ok'} role={recipientError ? 'alert' : 'status'}>
+              {recipientError ?? (props.chain === 'monero' ? 'Valid address for the selected Monero network.' : 'Valid Algorand address checksum. Confirm the recipient uses the selected network.')}
+            </p> : null}
+            <label htmlFor={`${props.chain}-tx-amount`}>Amount ({symbol})</label>
+            <input
+              id={`${props.chain}-tx-amount`}
+              data-address-status={amountError ? 'invalid' : undefined}
+              aria-invalid={!!amountError}
+              aria-describedby={`${props.chain}-amount-feedback`}
+              value={amount}
+              onChange={(event) => {
+                setAmount(event.target.value);
+                resetReview();
+              }}
+              placeholder="0.0"
+              inputMode="decimal"
+              required={!isSweep}
+              disabled={isSweep}
+            />
+            <div id={`${props.chain}-amount-feedback`}>
+              {amountError ? <p className="error" role="alert">{amountError}</p> : null}
+              {available !== null ? <p className="hint" role="status">{props.chain === 'monero' ? 'Last verified unlocked balance' : 'Available before fees'}: {formatAtomic(available, decimals)} {symbol}{props.chain === 'algorand' ? ' (account minimum reserved)' : '. Transaction review rechecks spendable funds and fees.'}</p> :
+                !balanceBusy ? <p className="hint" role="status">{props.chain === 'monero' ? 'Transaction review will check spendable funds and fees. No separate balance scan is required.' : 'Available balance not checked.'}</p> : null}
+              {props.chain === 'monero' && (balanceBusy || isSubmitting) ? <ScanActivity restoreHeight={Number(restoreHeight)} onStop={balanceBusy ? stopBalanceScan : undefined} /> : null}
+              {props.chain === 'monero' ? <button type="button" className="secondary" title="Scan unlocked balance" aria-label="Scan unlocked balance" disabled={balanceBusy || isSubmitting} onClick={checkMoneroBalance}><RefreshCw size={16} style={{ flexShrink: 0 }} className={balanceBusy ? 'is-spinning' : ''} /> {balanceBusy ? 'Scanning...' : 'Update balance'}</button> : null}
+              {balanceError ? <p className="error" role="alert">{balanceError}</p> : null}
+            </div>
+            {props.chain === 'algorand' ? (
+              <>
+                <label htmlFor="algorand-tx-note">Note (optional)</label>
+                <input id="algorand-tx-note" value={note} onChange={(event) => setNote(event.target.value)} maxLength={1024} />
+              </>
+            ) : (
+              <>
+                <label className="checkbox-label" htmlFor="monero-tx-send-all">
+                  <input
+                    id="monero-tx-send-all"
+                    type="checkbox"
+                    checked={sendAll}
+                    onChange={(event) => {
+                      setSendAll(event.target.checked);
+                      resetReview();
+                    }}
+                  />
+                  Send entire balance (minus fee)
+                </label>
+                <details className="transaction-scan-settings">
+                <summary>Scan settings</summary>
+                <label htmlFor="monero-restore-height">Wallet restore height</label>
                 <input
-                  id="monero-tx-send-all"
-                  type="checkbox"
-                  checked={sendAll}
-                  onChange={(event) => {
-                    setSendAll(event.target.checked);
-                    resetReview();
-                  }}
+                  id="monero-restore-height"
+                  value={restoreHeight}
+                  onChange={(event) => setRestoreHeight(event.target.value)}
+                  inputMode="numeric"
+                  required
                 />
-                Send entire balance (minus fee)
-              </label>
-              <label htmlFor="monero-restore-height">Wallet restore height</label>
-              <input
-                id="monero-restore-height"
-                value={restoreHeight}
-                onChange={(event) => setRestoreHeight(event.target.value)}
-                inputMode="numeric"
-                required
-              />
-              <p className="hint">
-                Scanning starts at this block. It's filled in from when this wallet (or swap) was
-                created; for an imported wallet, use a height at or before it first received funds.
-              </p>
-              {Number(restoreHeight) === 0 ? <p className="privacy-notice">Preparing from block 0 scans the full chain history and may use substantial data.</p> : null}
-            </>
-          )}
-          <button type="submit" disabled={!!recipientError || !!amountError || balanceBusy}>{isSubmitting ? (props.chain === 'monero' ? 'Scanning and Preparing...' : 'Preparing...') : 'Review Transaction'}</button>
+                <MoneroChainHeight config={props.config} />
+                <p className="hint">
+                  Scanning starts at this block. It's filled in from when this wallet (or swap) was
+                  created; for an imported wallet, use a height at or before it first received funds.
+                </p>
+                </details>
+                {Number(restoreHeight) === 0 ? <p className="privacy-notice">Preparing from block 0 scans the full chain history and may use substantial data.</p> : null}
+              </>
+            )}
+            <button type="submit" disabled={!!recipientError || !!amountError || balanceBusy}>{isSubmitting ? (props.chain === 'monero' ? 'Scanning and Preparing...' : 'Preparing...') : 'Review Transaction'}</button>
           </fieldset>
         </form>
       ) : (
@@ -357,29 +387,33 @@ function TransactionBuilder(props: TransactionBuilderProps) {
           {props.chain === 'algorand' && note ? <p><span>Note</span><code>{note}</code></p> : null}
           {props.chain === 'monero' ? <p><span>Restore height</span><strong>{restoreHeight}</strong></p> : null}
           <form className="import-form" onSubmit={(event) => { event.preventDefault(); void onConfirm(); }}>
-          <label htmlFor="transaction-approval-secret">Password or PIN</label>
-          <input id="transaction-approval-secret" type="password" autoComplete="off" value={approvalSecret} onChange={event => setApprovalSecret(event.target.value)} disabled={isSubmitting} required />
-          <div className="transaction-actions">
-            <button type="button" className="secondary" onClick={resetReview} disabled={isSubmitting}>Edit</button>
-            <button type="submit" disabled={isSubmitting || !approvalSecret}>
-              {isSubmitting ? 'Broadcasting...' : 'Confirm and Send'}
-            </button>
-          </div>
+            <label htmlFor="transaction-approval-secret">Password or PIN</label>
+            <input id="transaction-approval-secret" type="password" autoComplete="off" value={approvalSecret} onChange={event => setApprovalSecret(event.target.value)} disabled={isSubmitting} required />
+            <div className="transaction-actions">
+              <button type="button" className="secondary" onClick={resetReview} disabled={isSubmitting}>Edit</button>
+              <button type="submit" disabled={isSubmitting || !approvalSecret}>
+                {isSubmitting ? 'Broadcasting...' : 'Confirm and Send'}
+              </button>
+            </div>
           </form>
         </div>
       )}
 
       {error ? <p className="error" role="alert">{error}</p> : null}
       {result ? <div className="transaction-result" role="status">
-        <h3>{receiptStatus?.state === 'confirmed' ? 'Transaction confirmed' : receiptStatus?.state === 'rejected' ? 'Transaction rejected' : 'Awaiting confirmation'}</h3>
-        <p className="probe-ok result-value">{result}</p>
-        <p>To: <code className="result-value">{recipient}</code></p>
-        {receiptStatus?.block ? <p>{props.chain === 'algorand' ? 'Confirmed round' : 'Block height'}: <strong>{receiptStatus.block}</strong></p> : null}
+        <h3>{receiptStatus?.state === 'confirmed' ? 'Transaction confirmed' : receiptStatus?.state === 'rejected' ? 'Transaction rejected' : receiptStatus?.state === 'pool' ? 'In transaction pool (0 confirmations)' : receiptStatus?.state === 'unknown' ? 'Transaction status unknown' : 'Awaiting confirmation'}</h3>
+        {sentAmount !== null ? <p><strong>{formatAtomic(sentAmount, decimals)} {symbol}</strong></p> : null}
+        <p>To: <code className="receipt-destination">{recipient}</code></p>
+        {props.chain === 'monero' ? <MoneroConfirmation network={props.config.network} status={receiptStatus} /> : null}
         {receiptStatus?.confirmations !== undefined ? <p>Confirmations: {receiptStatus.confirmations}</p> : null}
         {receiptStatus?.detail ? <p className="error">{receiptStatus.detail}</p> : null}
         {receiptError ? <p className="error">Confirmation check unavailable: {receiptError}</p> : null}
+        <details><summary>Transaction details</summary>
+          <p className="result-value">{result}</p>
+          {receiptStatus?.block ? <p>{props.chain === 'algorand' ? 'Confirmed round' : 'Block height'}: <strong>{receiptStatus.block}</strong></p> : null}
+          {transactionId ? <CopyValue value={transactionId} label="transaction ID" /> : null}
+        </details>
         <button type="button" className="icon-btn" title="Refresh confirmation" aria-label="Refresh confirmation" onClick={() => setReceiptRefresh(value => value + 1)}><RefreshCw size={18} /></button>
-        {transactionId ? <CopyValue value={transactionId} label="transaction ID" /> : null}
         <button type="button" className="secondary" onClick={() => { resetReview(); setAmount(''); setRecipient(''); setNote(''); }}>New transaction</button>
       </div> : null}
     </div>

@@ -3,7 +3,7 @@ import type { ZebgenScanCombinedMoneroFundingParams } from './types';
 const REQUEST_TYPES = new Set([
   'connect', 'getAlgorandAddress', 'getMoneroShareInfo', 'computeCombinedMoneroAddress',
   'scanCombinedMoneroFunding', 'signAlgorandTransactions', 'computeMoneroLeakySignature',
-  'saveLeakSwap', 'listLeakSwaps',
+  'saveLeakSwap', 'listLeakSwaps', 'depositLeakSwapMonero', 'recoverLeakSwapMonero',
   'createSwapInvite', 'acceptSwapInvite',
   'confirmSwapAcceptance',
 ]);
@@ -13,12 +13,27 @@ export function validateProviderRequest(type: unknown, params: unknown): void {
     throw new Error('Unsupported Zebgen request type.');
   }
   if (type === 'scanCombinedMoneroFunding') validateFundingParams(params);
-    if (type === 'signAlgorandTransactions' || type === 'saveLeakSwap') {
-      const input = params as { agreementDigest?: unknown; agreementAppId?: unknown } | null;
-      if (input?.agreementDigest !== undefined && (typeof input.agreementDigest !== 'string' || !/^[0-9a-f]{64}$/.test(input.agreementDigest))) throw new Error('Invalid agreement digest.');
-      if (input?.agreementAppId !== undefined && (!input.agreementDigest || typeof input.agreementAppId !== 'string'
-        || !/^[1-9][0-9]*$/.test(input.agreementAppId) || BigInt(input.agreementAppId) > 0xffffffffffffffffn)) throw new Error('Invalid agreement application ID.');
+  if (type === 'recoverLeakSwapMonero') {
+    const input = params as Record<string, unknown> | null;
+    if (!input || Array.isArray(input) || Object.keys(input).some(key => !['appId', 'settlementTxId'].includes(key))
+      || typeof input.appId !== 'string' || !/^[1-9][0-9]{0,19}$/.test(input.appId) || BigInt(input.appId) > 0xffffffffffffffffn
+      || (input.settlementTxId !== undefined && (typeof input.settlementTxId !== 'string' || !/^[A-Z2-7]{52}$/.test(input.settlementTxId)))) {
+      throw new Error('Invalid LeakSwap recovery identity.');
     }
+  }
+  if (type === 'depositLeakSwapMonero') {
+    const input = params as Record<string, unknown> | null;
+    if (!input || Array.isArray(input) || Object.keys(input).sort().join(',') !== 'agreementDigest,appId'
+      || typeof input.agreementDigest !== 'string' || !/^[0-9a-f]{64}$/.test(input.agreementDigest)
+      || typeof input.appId !== 'string' || !/^[1-9][0-9]{0,19}$/.test(input.appId)
+      || BigInt(input.appId) > 0xffffffffffffffffn) throw new Error('Invalid LeakSwap deposit identity.');
+  }
+  if (['signAlgorandTransactions', 'saveLeakSwap', 'getMoneroShareInfo', 'computeCombinedMoneroAddress', 'scanCombinedMoneroFunding', 'computeMoneroLeakySignature'].includes(type)) {
+    const input = params as { agreementDigest?: unknown; agreementAppId?: unknown } | null;
+    if (input?.agreementDigest !== undefined && (typeof input.agreementDigest !== 'string' || !/^[0-9a-f]{64}$/.test(input.agreementDigest))) throw new Error('Invalid agreement digest.');
+    if (input?.agreementAppId !== undefined && (!input.agreementDigest || typeof input.agreementAppId !== 'string'
+      || !/^[1-9][0-9]*$/.test(input.agreementAppId) || BigInt(input.agreementAppId) > 0xffffffffffffffffn)) throw new Error('Invalid agreement application ID.');
+  }
   if (type === 'createSwapInvite') {
     const input = params as Record<string, unknown> | null;
     if (!input || Object.keys(input).sort().join(',') !== 'algoAmount,t0,t1,xmrAmount'
@@ -31,6 +46,8 @@ export function validateProviderRequest(type: unknown, params: unknown): void {
     if (!input || Object.keys(input).join(',') !== 'link' || typeof input.link !== 'string' || input.link.length > 12512) throw new Error('Invalid swap invite link.');
   }
   if (type === 'saveLeakSwap') {
+    const settlementTxId = (params as { settlementTxId?: unknown } | null)?.settlementTxId;
+    if (settlementTxId !== undefined && (typeof settlementTxId !== 'string' || !/^[A-Z2-7]{52}$/.test(settlementTxId))) throw new Error('Invalid settlement transaction ID.');
     const input = params as { appId?: unknown; combinedAddress?: unknown } | null;
     if (!input || typeof input.appId !== 'string' || !/^[1-9][0-9]*$/.test(input.appId)
       || BigInt(input.appId) > 0xffffffffffffffffn || typeof input.combinedAddress !== 'string'
@@ -57,7 +74,7 @@ export function validateFundingParams(params: unknown): asserts params is Zebgen
     }
   }
   if (input.moneroWalletId !== undefined &&
-      (!Number.isSafeInteger(input.moneroWalletId) || (input.moneroWalletId as number) < 0)) {
+    (!Number.isSafeInteger(input.moneroWalletId) || ((input.moneroWalletId as number) < 0 && !input.agreementDigest))) {
     throw new Error('Monero wallet ID must be a non-negative safe integer.');
   }
   if (input.restoreHeight !== undefined) {

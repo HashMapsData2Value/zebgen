@@ -18,23 +18,26 @@ test('Monero polls every five seconds, scans only changed heights, and keeps man
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
   }).outputText;
   const api = {};
-  runInNewContext(compiled, { exports: api, console, Date, AbortController, window: {
-    setInterval: (callback, delay) => { timers.push({ callback, delay }); return timers.length; }, clearInterval: () => {},
-  }, require: name => {
-    if (name === 'react') return { useState: () => [values.shift(), () => {}], useRef: initial => ({ current: initial }), useEffect: callback => effects.push(callback) };
-    if (name === 'react/jsx-runtime') return jsx;
-    if (name === 'lucide-react') return { RefreshCw: () => null };
-    if (name === './ScanActivity') return { default: () => null };
-    if (name.endsWith('/formatAtomic')) return { formatAtomic: value => value };
-    if (name.endsWith('/hostPermissions')) return { ensureHostPermissions: async () => {} };
-    if (name.endsWith('/messages')) return {
-      probeMoneroDaemonViaBackground: async () => ({ ok: true, height }),
-      scanMoneroBalanceViaBackground: async () => { scans++; if (blocked) await new Promise(resolve => { release = resolve; }); return { ok: true, balanceAtomic: '1' }; },
-    };
-    return {};
-  } });
+  runInNewContext(compiled, {
+    exports: api, console, Date, AbortController, window: {
+      setInterval: (callback, delay) => { timers.push({ callback, delay }); return timers.length; }, clearInterval: () => { },
+    }, require: name => {
+      if (name === 'react') return { useState: () => [values.shift(), () => { }], useRef: initial => ({ current: initial }), useEffect: callback => effects.push(callback) };
+      if (name === 'react/jsx-runtime') return jsx;
+      if (name === 'lucide-react') return { RefreshCw: () => null };
+      if (name === './ScanActivity') return { default: () => null };
+      if (name.endsWith('/formatAtomic')) return { formatAtomic: value => value };
+      if (name.endsWith('/moneroBalanceCache')) return { balanceCheckpointKey: () => 'checkpoint', loadBalanceCheckpoint: async () => null, saveBalanceCheckpoint: async () => {} };
+      if (name.endsWith('/hostPermissions')) return { ensureHostPermissions: async () => { } };
+      if (name.endsWith('/messages')) return {
+        probeMoneroDaemonViaBackground: async () => ({ ok: true, height }),
+        scanMoneroBalanceViaBackground: async () => { scans++; if (blocked) await new Promise(resolve => { release = resolve; }); return { ok: true, balanceAtomic: '1' }; },
+      };
+      return {};
+    }
+  });
   const tree = api.default({ address: 'address', restoreHeight: 17500, config: { daemon: { uri: 'http://127.0.0.1:18081' } }, walletId: 1, lockSecret: 'test' });
-  const cleanup = effects.map(effect => effect());
+  const cleanup = effects.filter((_, index) => index !== 0).map(effect => effect());
   assert.equal(timers.length, 1);
   assert.equal(timers[0].delay, 5000);
   await timers[0].callback();
@@ -75,27 +78,30 @@ test('Stop aborts scanning, enables a higher restore height and ignores late res
   const compiled = ts.transpileModule(readFileSync(new URL('../entrypoints/popup/MoneroBalance.tsx', import.meta.url), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
   }).outputText;
-  runInNewContext(compiled, { exports: api, console, Date, AbortController, require: name => {
-    if (name === 'react') return {
-      useState(initial) {
-        const index = stateIndex++;
-        if (!(index in states)) states[index] = initial;
-        return [states[index], value => { states[index] = value; }];
-      },
-      useRef(initial) { const index = refIndex++; return refs[index] ??= { current: initial }; },
-      useEffect() {},
-    };
-    if (name === 'react/jsx-runtime') return jsx;
-    if (name === 'lucide-react') return { RefreshCw: () => null };
-    if (name === './ScanActivity') return { default: 'scan-activity' };
-    if (name.endsWith('/formatAtomic')) return { formatAtomic: value => value };
-    if (name.endsWith('/hostPermissions')) return { ensureHostPermissions: async () => {} };
-    if (name.endsWith('/messages')) return {
-      probeMoneroDaemonViaBackground: async () => ({ ok: true, height: 17563 }),
-      scanMoneroBalanceViaBackground: (request, control) => new Promise(resolve => { requests.push({ request, control, resolve }); }),
-    };
-    return {};
-  } });
+  runInNewContext(compiled, {
+    exports: api, console, Date, AbortController, require: name => {
+      if (name === 'react') return {
+        useState(initial) {
+          const index = stateIndex++;
+          if (!(index in states)) states[index] = initial;
+          return [states[index], value => { states[index] = value; }];
+        },
+        useRef(initial) { const index = refIndex++; return refs[index] ??= { current: initial }; },
+        useEffect() { },
+      };
+      if (name === 'react/jsx-runtime') return jsx;
+      if (name === 'lucide-react') return { RefreshCw: () => null };
+      if (name === './ScanActivity') return { default: 'scan-activity' };
+      if (name.endsWith('/formatAtomic')) return { formatAtomic: value => value };
+      if (name.endsWith('/moneroBalanceCache')) return { balanceCheckpointKey: () => 'checkpoint', loadBalanceCheckpoint: async () => null, saveBalanceCheckpoint: async () => {} };
+      if (name.endsWith('/hostPermissions')) return { ensureHostPermissions: async () => { } };
+      if (name.endsWith('/messages')) return {
+        probeMoneroDaemonViaBackground: async () => ({ ok: true, height: 17563 }),
+        scanMoneroBalanceViaBackground: (request, control) => new Promise(resolve => { requests.push({ request, control, resolve }); }),
+      };
+      return {};
+    }
+  });
   const props = { address: 'address', restoreHeight: 0, config: { daemon: { uri: 'http://127.0.0.1:18081' } }, walletId: 1, lockSecret: 'test' };
   const render = () => { stateIndex = 0; refIndex = 0; return api.default(props); };
   function find(element, predicate) {
@@ -108,7 +114,11 @@ test('Stop aborts scanning, enables a higher restore height and ignores late res
     return null;
   }
   const settle = () => new Promise(resolve => setImmediate(resolve));
-  find(render(), element => element.props['aria-label'] === 'Scan unlocked balance').props.onClick();
+  find(render(), element => element.type === 'details').props.onToggle({ currentTarget: { open: true } });
+  assert.equal(find(render(), element => element.props['aria-label'] === 'Scan unlocked balance'), null);
+  const explicitScan = find(render(), element => element.type === 'button' && element.props.children === 'Scan from this height');
+  assert.equal(explicitScan.props.disabled, false);
+  explicitScan.props.onClick();
   await settle();
   assert.equal(requests[0].request.restoreHeight, 0);
   find(render(), element => element.type === 'scan-activity').props.onStop();
@@ -116,7 +126,7 @@ test('Stop aborts scanning, enables a higher restore height and ignores late res
   const heightInput = find(render(), element => element.props.id === 'balance-restore-height');
   assert.equal(heightInput.props.disabled, false);
   heightInput.props.onChange({ target: { value: '17500' } });
-  find(render(), element => element.props['aria-label'] === 'Scan unlocked balance').props.onClick();
+  find(render(), element => element.type === 'button' && element.props.children === 'Scan from this height').props.onClick();
   await settle();
   assert.equal(requests[1].request.restoreHeight, 17500);
   requests[0].resolve({ ok: true, balanceAtomic: '999' });

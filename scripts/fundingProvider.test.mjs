@@ -8,6 +8,20 @@ const params = {
   counterpartyPublicSpendKey: '02'.repeat(32),
 };
 
+test('recovery accepts only saved app identity and an optional transaction reference', () => {
+  assert.doesNotThrow(() => validateProviderRequest('recoverLeakSwapMonero', { appId: '42' }));
+  assert.doesNotThrow(() => validateProviderRequest('recoverLeakSwapMonero', { appId: '42', settlementTxId: 'A'.repeat(52) }));
+  for (const value of [null, [], {}, { appId: '0' }, { appId: '42', settlementTxId: 'bad' }, { appId: '42', privateSpendKey: 'aa' }]) {
+    assert.throws(() => validateProviderRequest('recoverLeakSwapMonero', value));
+  }
+});
+
+test('saving terminal state accepts a transaction reference but rejects malformed references', () => {
+  const input = { appId: '42', combinedAddress: '4'.repeat(95) };
+  assert.doesNotThrow(() => validateProviderRequest('saveLeakSwap', { ...input, settlementTxId: 'A'.repeat(52) }));
+  for (const settlementTxId of ['', null, 42, 'bad']) assert.throws(() => validateProviderRequest('saveLeakSwap', { ...input, settlementTxId }));
+});
+
 test('funding requests accept optional wallet and u32 restore heights', () => {
   for (const restoreHeight of [undefined, 0, 1, 0xffffffff]) {
     assert.doesNotThrow(() => validateProviderRequest('scanCombinedMoneroFunding', {
@@ -68,6 +82,15 @@ test('handshake provider accepts only structured terms and link-only responses',
     assert.doesNotThrow(() => validateProviderRequest(type, { link: 'https://app.leakswap.com/swap#invite=example' }));
     for (const input of [null, {}, { link: 'url', bytes: 'TX' }, { link: 'x'.repeat(12513) }]) {
       assert.throws(() => validateProviderRequest(type, input));
+    }
+  }
+});
+
+test('every share operation rejects malformed agreement digests before approval', () => {
+  for (const type of ['getMoneroShareInfo', 'computeCombinedMoneroAddress', 'scanCombinedMoneroFunding', 'computeMoneroLeakySignature']) {
+    assert.doesNotThrow(() => validateProviderRequest(type, { ...params, agreementDigest: 'ab'.repeat(32) }));
+    for (const agreementDigest of ['', 'AB'.repeat(32), 'aa', null, 1]) {
+      assert.throws(() => validateProviderRequest(type, { ...params, agreementDigest }), /agreement digest/);
     }
   }
 });

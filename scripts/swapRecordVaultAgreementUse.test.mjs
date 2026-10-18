@@ -9,30 +9,43 @@ import * as seedVault from '../lib/wallet/seedVault.ts';
 import * as agreementUse from '../lib/wallet/swapAgreementUse.ts';
 import * as transactions from '../lib/wallet/swapAgreementTransactions.ts';
 import { assertAgreementState } from 'leakswap-utils/dist/swapAgreement.js';
+import { verifiedSwapSettlement } from '../lib/wallet/swapSettlement.ts';
+import { leakySign } from '../lib/wallet/leakySign.ts';
+import { ed25519 } from '@noble/curves/ed25519.js';
 
 const source = readFileSync(new URL('../lib/wallet/swapRecordVault.ts', import.meta.url), 'utf8');
-const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS,
-  target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText;
+const compiled = ts.transpileModule(source, {
+  compilerOptions: {
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2022, esModuleInterop: true
+  }
+}).outputText;
 const genesisHash = new Uint8Array(32).fill(1);
 const digest = 'ab'.repeat(32);
 const ali = algosdk.generateAccount();
 const xin = algosdk.generateAccount();
 const deadline = Math.floor(Date.now() / 1000) + 3600;
 const agreement = {
-  offer: { payload: { algoGenesisHash: Buffer.from(genesisHash).toString('base64'), moneroNetwork: 'regtest',
-    aliAlgoAddress: ali.addr.toString(), aliPublicSpendKey: '02'.repeat(32), aliPrivateViewKey: '04'.repeat(32),
-    t0: deadline, t1: deadline + 3600, algoAmount: '10000000' } },
+  offer: {
+    payload: {
+      algoGenesisHash: Buffer.from(genesisHash).toString('base64'), moneroNetwork: 'regtest',
+      aliAlgoAddress: ali.addr.toString(), aliPublicSpendKey: '02'.repeat(32), aliPrivateViewKey: '04'.repeat(32),
+      t0: deadline, t1: deadline + 3600, algoAmount: '10000000'
+    }
+  },
   acceptance: { payload: { xinAlgoAddress: xin.addr.toString(), xinPublicSpendKey: '03'.repeat(32), xinPrivateViewKey: '05'.repeat(32) } },
 };
 
 function deployment(fee = 1000n) {
   const composer = new algosdk.AtomicTransactionComposer();
-  composer.addMethodCall({ appID: 0n, sender: ali.addr,
+  composer.addMethodCall({
+    appID: 0n, sender: ali.addr,
     suggestedParams: { fee, minFee: 1000n, flatFee: true, firstValid: 1n, lastValid: 100n, genesisHash },
     method: algosdk.ABIMethod.fromSignature('createApplication(byte[],account,byte[],uint64,uint64)void'),
     methodArgs: [new Uint8Array(32).fill(2), xin.addr, new Uint8Array(32).fill(3), BigInt(deadline), BigInt(deadline + 3600)],
     approvalProgram: new Uint8Array([10]), clearProgram: new Uint8Array([10]),
-    numGlobalInts: 3, numGlobalByteSlices: 4, numLocalInts: 0, numLocalByteSlices: 0, signer: async () => [] });
+    numGlobalInts: 3, numGlobalByteSlices: 4, numLocalInts: 0, numLocalByteSlices: 0, signer: async () => []
+  });
   return composer.buildGroup()[0].txn;
 }
 
@@ -40,6 +53,7 @@ function harness(locksAvailable = true) {
   const data = new Map();
   const scanHeights = [];
   const saved = [];
+  let journal = [];
   let queue = Promise.resolve();
   const storage = {
     get: async (key) => ({ [key]: structuredClone(data.get(key)) }),
@@ -60,47 +74,106 @@ function harness(locksAvailable = true) {
     'wxt/browser': { browser: { storage: { local: storage } } },
     '@noble/hashes/utils.js': { bytesToHex },
     '../network/networkStore': { getNetworkSettings: async () => ({ algorand: { algod: {} }, monero: { network: 'regtest' } }) },
-    '../network/chainIdentity': { verifyAlgorandGenesis: () => {} },
+    '../network/chainIdentity': { verifyAlgorandGenesis: () => { } },
     '../provider/base64': { bytesToBase64: (bytes) => Buffer.from(bytes).toString('base64'), base64ToBytes: (text) => new Uint8Array(Buffer.from(text, 'base64')) },
     './algoWallet': { deriveActiveSeedAlgoAddressAtIndex: async () => ({ algoAddress: ali.addr.toString() }) },
-    './moneroVault': { getMoneroWalletState: async () => ({ activeWalletId: 1 }),
-      saveMoneroCombinedContext: async () => {},
+    './moneroVault': {
+      getMoneroWalletState: async () => ({ activeWalletId: 1 }),
+      saveMoneroCombinedContext: async () => { },
       loadMoneroCombinedContext: async () => ({ walletId: 1, network: 'regtest', counterpartyPublicSpendKey: '03'.repeat(32), counterpartyPrivateViewKey: '05'.repeat(32) }),
-      unlockMoneroWallet: async () => ({ publicSpendKey: '02'.repeat(32) }) },
-    './moneroWallet': { computeCombinedAddressWithPrivateAndPublic: () => ({ combinedAddress: 'mock-combined' }),
-      combinePrivateSpendKeys: () => 'mock-view-key' },
-    '../monero/moneroDaemon': { scanMoneroFunding: async (_network, _spend, _view, height) => {
-      scanHeights.push(height);
-      return { matureAtomic: '0' };
-    } },
-    './swapHandshakeVault': { loadAcceptedSwap: async () => agreement },
+      unlockMoneroWallet: async () => ({ publicSpendKey: '02'.repeat(32) })
+    },
+    './moneroWallet': {
+      computeCombinedAddressWithPrivateAndPublic: () => ({ combinedAddress: 'mock-combined' }),
+      combinePrivateSpendKeys: () => 'mock-view-key'
+    },
+    '../monero/moneroDaemon': {
+      scanMoneroFunding: async (_network, _spend, _view, height) => {
+        scanHeights.push(height);
+        return { matureAtomic: '0' };
+      }
+    },
+    './swapHandshakeVault': { loadAcceptedSwap: async () => agreement, resolveSwapWalletId: async () => 1 },
     'leakswap-utils/dist/swapAgreement.js': { assertAgreementState },
     './swapAgreementTransactions': transactions,
-    './swapAgreementArtifact': { assertAgreementPrograms: () => {}, agreementSponsorAddress: async () => xin.addr.toString() },
-    './swapRecords': { listSwapRecords: async () => saved, listSignedTransactions: async () => [], swapRecordKey: () => 'saved-swap',
-      saveSwapRecord: async (_storage, record) => { saved.push(record); } },
+    './swapAgreementArtifact': { assertAgreementPrograms: () => { }, agreementSponsorAddress: async () => xin.addr.toString() },
+    './swapRecords': {
+      listSwapRecords: async () => saved, listSignedTransactions: async () => journal, swapRecordKey: () => 'saved-swap',
+      saveSwapRecord: async (_storage, record) => {
+        const index = saved.findIndex(previous => previous.appId === record.appId && previous.genesisHash === record.genesisHash
+          && previous.algoAddress === record.algoAddress && previous.context.walletId === record.context.walletId);
+        if (index < 0) saved.push(record);
+        else saved[index] = record;
+      }
+    },
     './seedVault': seedVault, './swapAgreementUse': agreementUse,
+    './swapSettlement': { verifiedSwapSettlement },
   };
-  const locks = { request: (_name, action) => {
-    const result = queue.then(action);
-    queue = result.catch(() => {});
-    return result;
-  } };
+  const locks = {
+    request: (_name, action) => {
+      const result = queue.then(action);
+      queue = result.catch(() => { });
+      return result;
+    }
+  };
   const load = () => {
     const api = {};
-    runInNewContext(compiled, { exports: api, require: (name) => {
-      if (!(name in modules)) throw new Error('Unexpected import: ' + name);
-      return modules[name];
-    }, Uint8Array, TextEncoder, TextDecoder, navigator: { locks: locksAvailable ? locks : undefined } });
+    runInNewContext(compiled, {
+      exports: api, require: (name) => {
+        if (!(name in modules)) throw new Error('Unexpected import: ' + name);
+        return modules[name];
+      }, Uint8Array, TextEncoder, TextDecoder, console, navigator: { locks: locksAvailable ? locks : undefined }
+    });
     return api;
   };
   const api = load();
-  const sign = (txn, extra = {}) => api.validateAgreementSigning({ agreementDigest: digest,
-    txns: [Buffer.from(algosdk.encodeUnsignedTransaction(txn)).toString('base64')], indexesToSign: [0], ...extra }, 'secret');
-  return { api, sign, storage, data, saved, load, algod, scanHeights,
+  const sign = (txn, extra = {}) => api.validateAgreementSigning({
+    agreementDigest: digest,
+    txns: [Buffer.from(algosdk.encodeUnsignedTransaction(txn)).toString('base64')], indexesToSign: [0], ...extra
+  }, 'secret');
+  return {
+    api, sign, storage, data, saved, load, algod, scanHeights,
     setScanner: scanner => { modules['../monero/moneroDaemon'].scanMoneroFunding = scanner; },
-    setWallet: material => { modules['./moneroVault'].unlockMoneroWallet = async () => material; } };
+    setWallet: material => { modules['./moneroVault'].unlockMoneroWallet = async () => material; },
+    setJournal: entries => { journal = entries; },
+    useShare: () => {
+      modules['./swapHandshakeVault'].resolveSwapWalletId = async () => -41;
+      modules['./moneroVault'].unlockMoneroWallet = async (_secret, _network, walletId) => {
+        assert.equal(walletId, -41, 'must unlock the share, never the normal active wallet');
+        return { publicSpendKey: '02'.repeat(32) };
+      };
+      modules['./moneroVault'].loadMoneroCombinedContext = async binding => {
+        assert.equal(binding.walletId, -41);
+        return { ...binding, counterpartyPublicSpendKey: '03'.repeat(32), counterpartyPrivateViewKey: '05'.repeat(32) };
+      };
+    }
+  };
 }
+
+test('confirmed journal settlement is restored and saved without consulting the deleted app', async () => {
+  const vault = harness();
+  const scalar = new Uint8Array(32); scalar[0] = 7;
+  const publicKey = bytesToHex(ed25519.Point.BASE.multiply(7n).toBytes());
+  const transaction = algosdk.makeApplicationDeleteTxnFromObject({ sender: ali.addr, appIndex: 42n,
+    appArgs: [algosdk.ABIMethod.fromSignature('leakyRefund(byte[],pay)void').getSelector(),
+      new Uint8Array([0, 64, ...leakySign(algosdk.getApplicationAddress(42n).publicKey, scalar)])],
+    suggestedParams: { fee: 1000n, minFee: 1000n, firstValid: 1n, lastValid: 10n, genesisHash } });
+  const record = { version: 1, appId: '42', genesisHash: Buffer.from(genesisHash).toString('base64'), role: 'ali',
+    algoAddress: ali.addr.toString(), aliAddress: ali.addr.toString(), xinAddress: xin.addr.toString(),
+    context: { walletId: 1, network: 'regtest', combinedAddress: 'mock-combined', counterpartyPublicSpendKey: publicKey } };
+  vault.saved.push(record);
+  vault.setWallet({ publicSpendKey: publicKey });
+  vault.setJournal([{ genesisHash: record.genesisHash, sender: record.algoAddress, txId: transaction.txID(), unsignedTransaction: Buffer.from(algosdk.encodeUnsignedTransaction(transaction)).toString('base64') }]);
+  vault.algod.getApplicationByID = () => { throw new Error('Deleted app must not be queried'); };
+  let confirmedRound = 0n;
+  vault.algod.pendingTransactionInformation = () => ({ do: async () => ({ txn: { txn: transaction }, confirmedRound }) });
+  assert.equal((await vault.api.listVerifiedLeakSwaps('secret')).swaps[0].settlement, undefined);
+  confirmedRound = 5n;
+  assert.equal((await vault.api.listVerifiedLeakSwaps('secret')).swaps[0].settlement.kind, 'refund');
+  assert.equal(vault.saved[0].settlement.confirmedRound, '5');
+  await vault.api.saveVerifiedLeakSwap({ appId: '42', combinedAddress: 'mock-combined', settlementTxId: transaction.txID() }, 'secret');
+  assert.equal(vault.saved.at(-1).settlement.txId, transaction.txID());
+});
 
 test('Set Ready scans from the signed height, with a genesis fallback for legacy offers', async () => {
   for (const height of [15227, undefined]) {
@@ -111,12 +184,16 @@ test('Set Ready scans from the signed height, with a genesis fallback for legacy
     vault.algod.accountInformation = () => ({ do: async () => ({ amount: 10000000n }) });
     const suggestedParams = { fee: 1000n, flatFee: true, firstValid: 1n, lastValid: 100n, genesisHash };
     const transactions = [algosdk.makePaymentTxnWithSuggestedParamsFromObject({ sender: xin.addr, receiver: ali.addr, amount: 0n, suggestedParams }),
-      algosdk.makeApplicationNoOpTxnFromObject({ sender: ali.addr, appIndex: 42n,
-        appArgs: [algosdk.ABIMethod.fromSignature('setReady(pay)void').getSelector()], suggestedParams })];
+    algosdk.makeApplicationNoOpTxnFromObject({
+      sender: ali.addr, appIndex: 42n,
+      appArgs: [algosdk.ABIMethod.fromSignature('setReady(pay)void').getSelector()], suggestedParams
+    })];
     algosdk.assignGroupID(transactions);
-    await assert.rejects(vault.api.validateAgreementSigning({ agreementDigest: digest, agreementAppId: '42',
+    await assert.rejects(vault.api.validateAgreementSigning({
+      agreementDigest: digest, agreementAppId: '42',
       txns: transactions.map((transaction) => Buffer.from(algosdk.encodeUnsignedTransaction(transaction)).toString('base64')),
-      indexesToSign: [1] }, 'secret'), /Mature Monero funding is below/);
+      indexesToSign: [1]
+    }, 'secret'), /Mature Monero funding is below/);
     assert.deepEqual(vault.scanHeights, [height ?? 0]);
   }
 });
@@ -125,11 +202,15 @@ function readyRequest() {
   const suggestedParams = { fee: 1000n, flatFee: true, firstValid: 1n, lastValid: 100n, genesisHash };
   const group = algosdk.assignGroupID([
     algosdk.makePaymentTxnWithSuggestedParamsFromObject({ sender: xin.addr, receiver: ali.addr, amount: 0n, suggestedParams }),
-    algosdk.makeApplicationNoOpTxnFromObject({ sender: ali.addr, appIndex: 42n,
-      appArgs: [algosdk.ABIMethod.fromSignature('setReady(pay)void').getSelector()], suggestedParams }),
+    algosdk.makeApplicationNoOpTxnFromObject({
+      sender: ali.addr, appIndex: 42n,
+      appArgs: [algosdk.ABIMethod.fromSignature('setReady(pay)void').getSelector()], suggestedParams
+    }),
   ]);
-  return { agreementDigest: digest, agreementAppId: '42', indexesToSign: [1],
-    txns: group.map(transaction => Buffer.from(algosdk.encodeUnsignedTransaction(transaction)).toString('base64')) };
+  return {
+    agreementDigest: digest, agreementAppId: '42', indexesToSign: [1],
+    txns: group.map(transaction => Buffer.from(algosdk.encodeUnsignedTransaction(transaction)).toString('base64'))
+  };
 }
 
 test('Set Ready rescans after success and rejects funding lost to a later chain view', async () => {
@@ -219,10 +300,12 @@ test('actual funding path binds the first app before return and rejects funding 
     const suggestedParams = { fee: 1000n, minFee: 1000n, flatFee: true, firstValid: 1n, lastValid: 100n, genesisHash };
     const txns = algosdk.assignGroupID([
       algosdk.makePaymentTxnWithSuggestedParamsFromObject({ sender: ali.addr, receiver: algosdk.getApplicationAddress(BigInt(appId)), amount: 10000000n, suggestedParams }),
-      algosdk.makePaymentTxnWithSuggestedParamsFromObject({ sender: ali.addr, receiver: xin.addr, amount: 204000n, suggestedParams }),
+      algosdk.makePaymentTxnWithSuggestedParamsFromObject({ sender: ali.addr, receiver: xin.addr, amount: 209000n, suggestedParams }),
     ]);
-    return vault.api.validateAgreementSigning({ agreementDigest: digest, agreementAppId: appId,
-      txns: txns.map((txn) => Buffer.from(algosdk.encodeUnsignedTransaction(txn)).toString('base64')), indexesToSign: [0, 1] }, 'secret');
+    return vault.api.validateAgreementSigning({
+      agreementDigest: digest, agreementAppId: appId,
+      txns: txns.map((txn) => Buffer.from(algosdk.encodeUnsignedTransaction(txn)).toString('base64')), indexesToSign: [0, 1]
+    }, 'secret');
   };
   await fund('123');
   assert.equal(vault.data.size, 1);
@@ -234,10 +317,12 @@ function fundingRequest() {
   const suggestedParams = { fee: 1000n, minFee: 1000n, flatFee: true, firstValid: 1n, lastValid: 100n, genesisHash };
   const group = algosdk.assignGroupID([
     algosdk.makePaymentTxnWithSuggestedParamsFromObject({ sender: ali.addr, receiver: algosdk.getApplicationAddress(123n), amount: 10000000n, suggestedParams }),
-    algosdk.makePaymentTxnWithSuggestedParamsFromObject({ sender: ali.addr, receiver: xin.addr, amount: 204000n, suggestedParams }),
+    algosdk.makePaymentTxnWithSuggestedParamsFromObject({ sender: ali.addr, receiver: xin.addr, amount: 209000n, suggestedParams }),
   ]);
-  return { agreementDigest: digest, agreementAppId: '123', indexesToSign: [0, 1],
-    txns: group.map(transaction => Buffer.from(algosdk.encodeUnsignedTransaction(transaction)).toString('base64')) };
+  return {
+    agreementDigest: digest, agreementAppId: '123', indexesToSign: [0, 1],
+    txns: group.map(transaction => Buffer.from(algosdk.encodeUnsignedTransaction(transaction)).toString('base64'))
+  };
 }
 
 test('funding response-loss retry is rejected once the fresh escrow query shows confirmation', async () => {
@@ -253,9 +338,13 @@ test('funding rejects missing sponsor, wrong sponsor amount and partial existing
   const request = fundingRequest();
   await assert.rejects(vault.api.validateAgreementSigning({ ...request, txns: request.txns.slice(0, 1), indexesToSign: [0] }, 'secret'), /atomic escrow and sponsor/);
   const payment = algosdk.decodeUnsignedTransaction(Buffer.from(request.txns[1], 'base64'));
-  payment.payment.amount = 203999n;
-  await assert.rejects(vault.api.validateAgreementSigning({ ...request,
-    txns: [request.txns[0], Buffer.from(algosdk.encodeUnsignedTransaction(payment)).toString('base64')] }, 'secret'), /sponsor funding/);
+  for (const amount of [204000n, 208999n, 209001n]) {
+    payment.payment.amount = amount;
+    await assert.rejects(vault.api.validateAgreementSigning({
+      ...request,
+      txns: [request.txns[0], Buffer.from(algosdk.encodeUnsignedTransaction(payment)).toString('base64')]
+    }, 'secret'), /sponsor funding/);
+  }
   vault.algod.accountInformation = () => ({ do: async () => ({ amount: 1n }) });
   await assert.rejects(vault.api.validateAgreementSigning(request, 'secret'), /already funded/);
 });
@@ -303,4 +392,25 @@ test('invalid deployment selection cannot reserve and generic digest-less signin
   await vault.sign(deployment());
   await vault.sign(deployment(2000n), { agreementDigest: undefined });
   assert.equal(vault.data.size, 1);
+});
+
+test('share-bound save, list and Set Ready use the share even while the normal wallet stays active', async () => {
+  const vault = harness();
+  vault.useShare();
+  await vault.api.saveVerifiedLeakSwap({ appId: '123', agreementDigest: digest, combinedAddress: 'mock-combined' }, 'secret');
+  assert.equal(vault.saved[0].context.walletId, -41);
+  const listed = await vault.api.listVerifiedLeakSwaps('secret');
+  assert.equal(listed.swaps.length, 1);
+  assert.equal(listed.swaps[0].appId, '123');
+  agreement.offer.payload.xmrAmount = '1000000000000';
+  vault.algod.accountInformation = () => ({ do: async () => ({ amount: 10000000n }) });
+  const suggestedParams = { fee: 1000n, flatFee: true, firstValid: 1n, lastValid: 100n, genesisHash };
+  const group = [algosdk.makePaymentTxnWithSuggestedParamsFromObject({ sender: xin.addr, receiver: ali.addr, amount: 0n, suggestedParams }),
+    algosdk.makeApplicationNoOpTxnFromObject({ sender: ali.addr, appIndex: 123n,
+      appArgs: [algosdk.ABIMethod.fromSignature('setReady(pay)void').getSelector()], suggestedParams })];
+  algosdk.assignGroupID(group);
+  await assert.rejects(vault.api.validateAgreementSigning({ agreementDigest: digest, agreementAppId: '123',
+    txns: group.map(txn => Buffer.from(algosdk.encodeUnsignedTransaction(txn)).toString('base64')), indexesToSign: [1]
+  }, 'secret'), /Mature Monero funding is below/);
+  assert.equal(vault.scanHeights.length, 1);
 });

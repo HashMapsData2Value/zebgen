@@ -9,14 +9,15 @@ import { deriveActiveSeedAlgoAddressAtIndex } from './algoWallet';
 import { getMoneroWalletState, loadMoneroCombinedContext, saveMoneroCombinedContext, unlockMoneroWallet } from './moneroVault';
 import { computeCombinedAddressWithPrivateAndPublic, combinePrivateSpendKeys } from './moneroWallet';
 import { scanMoneroFunding, type MoneroFundingControl } from '../monero/moneroDaemon';
-import { loadAcceptedSwap } from './swapHandshakeVault';
+import { loadAcceptedSwap, resolveSwapWalletId } from './swapHandshakeVault';
 import { assertAgreementState } from 'leakswap-utils/dist/swapAgreement.js';
-import { checkAgreementTransaction, checkAgreementEscrowPayment } from './swapAgreementTransactions';
+import { checkAgreementTransaction, checkAgreementEscrowPayment, checkAgreementSponsorPayment } from './swapAgreementTransactions';
 import type { ZebgenSignAlgorandTransactionsParams } from '../provider/types';
 import { agreementSponsorAddress, assertAgreementPrograms } from './swapAgreementArtifact';
 import { listSignedTransactions, listSwapRecords, saveSignedTransactions, saveSwapRecord, swapRecordKey, type SignedTransactionRecord, type SwapRecord } from './swapRecords';
 import { decryptSeed, encryptSeed } from './seedVault';
 import { reserveAgreementUse, type AgreementUse, type AgreementUseIdentity } from './swapAgreementUse';
+import { verifiedSwapSettlement } from './swapSettlement';
 
 async function reserveUse(identity: AgreementUseIdentity, use: AgreementUse, secret: string): Promise<void> {
   await reserveAgreementUse({
@@ -40,8 +41,12 @@ async function reserveUse(identity: AgreementUseIdentity, use: AgreementUse, sec
       const plaintext = new TextEncoder().encode(JSON.stringify(record));
       try {
         const encrypted = await encryptSeed(plaintext, secret);
-        await browser.storage.local.set({ [key]: { version: 1, ciphertext: Array.from(new Uint8Array(encrypted.encryptedSeed)),
-          salt: Array.from(encrypted.salt), iv: Array.from(encrypted.iv) } });
+        await browser.storage.local.set({
+          [key]: {
+            version: 1, ciphertext: Array.from(new Uint8Array(encrypted.encryptedSeed)),
+            salt: Array.from(encrypted.salt), iv: Array.from(encrypted.iv)
+          }
+        });
       } finally { plaintext.fill(0); }
     },
     savedAppIds: async (binding) => (await listSwapRecords(browser.storage.local, secret))
@@ -63,12 +68,23 @@ async function chain() {
 export async function saveVerifiedLeakSwap(params: ZebgenSaveLeakSwapParams, secret: string): Promise<{ appId: string }> {
   const { settings, algod, genesisHash } = await chain();
   const { algoAddress } = await deriveActiveSeedAlgoAddressAtIndex(secret, 0);
-  const walletId = (await getMoneroWalletState()).activeWalletId;
+  const walletId = await resolveSwapWalletId(params.agreementDigest, secret);
   if (walletId === null) throw new Error('Open the original Monero wallet first.');
   const context = await loadMoneroCombinedContext({ walletId, network: settings.monero.network, combinedAddress: params.combinedAddress }, secret);
   if (!context) throw new Error('Compute and save the combined address before saving this swap.');
   const owner = await unlockMoneroWallet(secret, settings.monero.networkType, walletId);
   if (!owner) throw new Error('Original Monero wallet is unavailable.');
+  if (params.settlementTxId) {
+    const records = (await listSwapRecords(browser.storage.local, secret)).filter(record =>
+      record.genesisHash === genesisHash && record.appId === params.appId && record.algoAddress === algoAddress
+      && record.context.walletId === walletId && record.context.network === settings.monero.network
+      && record.context.combinedAddress === params.combinedAddress && record.agreementDigest === params.agreementDigest);
+    if (records.length !== 1) throw new Error('A matching saved swap is required before recording settlement.');
+    const pending = await algod.pendingTransactionInformation(params.settlementTxId).do();
+    const settlement = verifiedSwapSettlement(pending.txn.txn, pending.confirmedRound ?? 0n, params.settlementTxId, records[0], owner.publicSpendKey);
+    await navigator.locks.request(swapRecordKey(records[0]), () => saveSwapRecord(browser.storage.local, { ...records[0], settlement }, secret));
+    return { appId: params.appId };
+  }
   const app = await algod.getApplicationByID(BigInt(params.appId)).do();
   const state = app.params?.globalState ?? [];
   const value = (name: string) => {
@@ -119,10 +135,12 @@ export async function verifyAgreementApplication(digest: string, appId: bigint, 
     if (!entry) throw new Error(`Swap is missing ${name}.`);
     return entry.value;
   };
-  assertAgreementState(agreement, { genesisHash, moneroNetwork: settings.monero.network,
+  assertAgreementState(agreement, {
+    genesisHash, moneroNetwork: settings.monero.network,
     aliAddress: algosdk.encodeAddress(value('aliAlgoAddr').bytes), xinAddress: algosdk.encodeAddress(value('xinAlgoAddr').bytes),
     aliPublicSpendKey: bytesToHex(value('aliXternalPK').bytes), xinPublicSpendKey: bytesToHex(value('xinXternalPK').bytes),
-    t0: Number(value('t0').uint), t1: Number(value('t1').uint) });
+    t0: Number(value('t0').uint), t1: Number(value('t1').uint)
+  });
   await reserveUse({ genesisHash, digest }, { appId: appId.toString() }, secret);
   return agreement;
 }
@@ -173,7 +191,7 @@ export async function validateAgreementSigning(params: ZebgenSignAlgorandTransac
     if (ready) {
       const owner = agreement.offer.payload;
       const counterparty = agreement.acceptance.payload;
-      const walletId = (await getMoneroWalletState()).activeWalletId;
+      const walletId = await resolveSwapWalletId(digest, secret);
       if (walletId === null) throw new Error('Original Monero wallet is unavailable.');
       const material = await unlockMoneroWallet(secret, settings.monero.networkType, walletId);
       if (!material || material.publicSpendKey !== owner.aliPublicSpendKey) throw new Error('Only Ali may set the agreement ready.');
@@ -186,19 +204,18 @@ export async function validateAgreementSigning(params: ZebgenSignAlgorandTransac
   } else {
     if (txns.length !== 2 || txns.some((txn) => !txn.payment)) throw new Error('Expected atomic escrow and sponsor funding.');
     checkAgreementEscrowPayment(txns[0], agreement, appId);
-    if (txns[1].sender.toString() !== agreement.offer.payload.aliAlgoAddress || txns[1].payment!.amount !== 204000n
-      || txns[1].payment!.receiver.toString() !== sponsor) throw new Error('Unexpected agreement sponsor funding.');
+    checkAgreementSponsorPayment(txns[1], agreement, sponsor);
     const escrow = await algod.accountInformation(algosdk.getApplicationAddress(appId)).do();
     if (escrow.amount !== 0n) throw new Error('Escrow is already funded. Check the chain before retrying.');
   }
 }
 
 export async function listVerifiedLeakSwaps(secret: string): Promise<{ swaps: ZebgenSavedLeakSwap[] }> {
-  const { settings, genesisHash } = await chain();
+  const { settings, genesisHash, algod } = await chain();
   const { algoAddress } = await deriveActiveSeedAlgoAddressAtIndex(secret, 0);
   const walletId = (await getMoneroWalletState()).activeWalletId;
   const records = (await listSwapRecords(browser.storage.local, secret)).filter((record) =>
-    record.genesisHash === genesisHash && record.algoAddress === algoAddress && record.context.walletId === walletId && record.context.network === settings.monero.network);
+    record.genesisHash === genesisHash && record.algoAddress === algoAddress && (record.context.walletId === walletId || record.context.walletId < 0) && record.context.network === settings.monero.network);
   const journal = records.length ? await listSignedTransactions(browser.storage.local, secret) : [];
   const swaps: ZebgenSavedLeakSwap[] = [];
   for (const record of records) {
@@ -214,12 +231,29 @@ export async function listVerifiedLeakSwaps(secret: string): Promise<{ swaps: Ze
       const method = METHODS.find((signature) => selector && bytesToHex(algosdk.ABIMethod.fromSignature(signature).getSelector()) === bytesToHex(selector));
       return [{ txId: entry.txId, method: method?.split('(')[0] ?? null }];
     });
-    swaps.push({ appId: record.appId, appAddress: record.appAddress, genesisHash, role: record.role, algoAddress,
+    if (!record.settlement) {
+      for (const candidate of signedTransactions.filter(entry => ['leakyClaim', 'leakyRefund', 'punishRefund'].includes(entry.method ?? ''))) {
+        try {
+          const pending = await algod.pendingTransactionInformation(candidate.txId).do();
+          if (!pending.confirmedRound) continue;
+          const settlement = verifiedSwapSettlement(pending.txn.txn, pending.confirmedRound, candidate.txId, record, owner.publicSpendKey);
+          await navigator.locks.request(swapRecordKey(record), () => saveSwapRecord(browser.storage.local, { ...record, settlement }, secret));
+          record.settlement = settlement;
+          break;
+        } catch (error) {
+          console.error('Unable to reconcile saved LeakSwap settlement', candidate.txId, error);
+        }
+      }
+    }
+    swaps.push({
+      appId: record.appId, appAddress: record.appAddress, genesisHash, role: record.role, algoAddress,
       counterpartyAlgoAddress: record.role === 'ali' ? record.xinAddress : record.aliAddress,
       t0: record.t0, t1: record.t1, restoreHeight: context.restoreHeight,
       counterpartyPublicSpendKey: context.counterpartyPublicSpendKey, counterpartyPrivateViewKey: context.counterpartyPrivateViewKey,
       shareInfo: { address: owner.address, publicSpendKey: owner.publicSpendKey, privateViewKey: owner.privateViewKey }, combined, signedTransactions,
-      ...(record.agreementDigest ? { agreement: await loadAcceptedSwap(record.agreementDigest, secret) } : {}) });
+      ...(record.agreementDigest ? { agreement: await loadAcceptedSwap(record.agreementDigest, secret) } : {}),
+      ...(record.settlement ? { settlement: record.settlement } : {})
+    });
   }
   return { swaps };
 }
@@ -228,8 +262,10 @@ export async function journalSignedAlgorandTransactions(txns: Uint8Array[], orig
   const records: SignedTransactionRecord[] = txns.map((bytes) => {
     const txn = algosdk.decodeUnsignedTransaction(bytes);
     if (!txn.genesisHash) throw new Error('Cannot journal a transaction without a genesis hash.');
-    return { version: 1, genesisHash: bytesToBase64(txn.genesisHash), txId: txn.txID(), sender: txn.sender.toString(), origin,
-      firstValid: txn.firstValid.toString(), lastValid: txn.lastValid.toString(), unsignedTransaction: bytesToBase64(bytes), signedAt: new Date().toISOString() };
+    return {
+      version: 1, genesisHash: bytesToBase64(txn.genesisHash), txId: txn.txID(), sender: txn.sender.toString(), origin,
+      firstValid: txn.firstValid.toString(), lastValid: txn.lastValid.toString(), unsignedTransaction: bytesToBase64(bytes), signedAt: new Date().toISOString()
+    };
   });
   await saveSignedTransactions(browser.storage.local, records, secret);
 }

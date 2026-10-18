@@ -13,12 +13,16 @@ export async function readSwapChainStatus(
   record: SwapRecord, client: algosdk.Algodv2 | null, genesis: string,
   chainTime: number | undefined, checkedAt: number,
 ): Promise<SavedSwapStatus> {
-  const result: SavedSwapStatus = { appId: record.appId, genesisHash: record.genesisHash,
+  const result: SavedSwapStatus = {
+    appId: record.appId, genesisHash: record.genesisHash,
     moneroNetwork: record.context.network, role: record.role, t0: record.t0, t1: record.t1,
-    state: 'unknown', funding: 'unknown', checkedAt, chainTime };
+    state: 'unknown', funding: 'unknown', checkedAt, chainTime
+  };
   if (!client) return { ...result, issue: 'The Algorand node could not be reached. Refresh to try again.' };
-  if (genesis !== record.genesisHash) return { ...result,
-    issue: 'This swap belongs to another Algorand network. Select its network in Algorand settings, then refresh.' };
+  if (genesis !== record.genesisHash) return {
+    ...result,
+    issue: 'This swap belongs to another Algorand network. Select its network in Algorand settings, then refresh.'
+  };
   if (algosdk.getApplicationAddress(BigInt(record.appId)).toString() !== record.appAddress) return {
     ...result, issue: 'The saved escrow address does not match this application. Do not send funds.',
   };

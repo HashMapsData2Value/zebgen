@@ -23,7 +23,7 @@ const PREFIX = 'moneroCombinedContext:';
 const KEY_PATTERN = /^[0-9a-f]{64}$/i;
 
 export function combinedContextStorageKey(binding: CombinedAddressBinding): string {
-  if (!Number.isSafeInteger(binding.walletId) || binding.walletId < 1
+  if (!Number.isSafeInteger(binding.walletId) || binding.walletId === 0
     || !['mainnet', 'testnet', 'stagenet', 'regtest'].includes(binding.network)
     || !/^[1-9A-HJ-NP-Za-km-z]{95}$/.test(binding.combinedAddress)) {
     throw new Error('Invalid combined-address context metadata.');
@@ -85,12 +85,14 @@ export async function saveCombinedContext(storage: ContextStorage, context: Comb
   const plaintext = new TextEncoder().encode(JSON.stringify(saved));
   try {
     const encrypted = await encryptSeed(plaintext, secret);
-    await storage.set({ [combinedContextStorageKey(context)]: {
-      version: 1,
-      ciphertext: Array.from(new Uint8Array(encrypted.encryptedSeed)),
-      salt: Array.from(encrypted.salt),
-      iv: Array.from(encrypted.iv),
-    } });
+    await storage.set({
+      [combinedContextStorageKey(context)]: {
+        version: 1,
+        ciphertext: Array.from(new Uint8Array(encrypted.encryptedSeed)),
+        salt: Array.from(encrypted.salt),
+        iv: Array.from(encrypted.iv),
+      }
+    });
   } finally {
     plaintext.fill(0);
   }

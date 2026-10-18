@@ -14,7 +14,7 @@ function storage() {
     savedAppIds: async () => [],
     withLock(action) {
       const result = queue.then(action);
-      queue = result.catch(() => {});
+      queue = result.catch(() => { });
       return result;
     },
     read: async (key) => structuredClone(records.get(key) ?? null),
@@ -97,10 +97,12 @@ test('storage read, legacy lookup and write failures propagate before approval s
 test('persisted write followed by a lost response still consumes the reservation', async () => {
   const store = storage();
   const write = store.write;
-  await assert.rejects(reserveAgreementUse({ ...store, write: async (...args) => {
-    await write(...args);
-    throw new Error('response lost');
-  } }, identity, deployment), /response lost/);
+  await assert.rejects(reserveAgreementUse({
+    ...store, write: async (...args) => {
+      await write(...args);
+      throw new Error('response lost');
+    }
+  }, identity, deployment), /response lost/);
   await assert.rejects(reserveAgreementUse(store, identity, differentDeployment), /permanently/);
   await reserveAgreementUse(store, identity, deployment);
 });

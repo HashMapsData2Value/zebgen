@@ -2,6 +2,7 @@ import { decryptSeed, encryptSeed } from './seedVault.ts';
 import { validateCombinedContext, type CombinedAddressContext, type ContextStorage } from './combinedAddressContext.ts';
 
 export interface SwapRecord {
+  settlement?: { kind: 'claim' | 'refund' | 'punish'; txId: string; confirmedRound: string };
   agreementDigest?: string;
   version: 1;
   genesisHash: string;
@@ -33,6 +34,32 @@ const JOURNAL = 'signedAlgoTransaction:';
 const HASH = /^[A-Za-z0-9+/]{43}=$/;
 const ADDRESS = /^[A-Z2-7]{58}$/;
 
+export interface SettlementEvidence {
+  txId: string;
+  confirmedRound: string;
+  transaction: string;
+}
+
+function validateSettlementEvidence(evidence: SettlementEvidence): void {
+  if (!evidence || !/^[A-Z2-7]{52}$/.test(evidence.txId) || !/^[1-9][0-9]*$/.test(evidence.confirmedRound)
+    || typeof evidence.transaction !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(evidence.transaction)) {
+    throw new Error('Invalid saved settlement evidence.');
+  }
+}
+
+export async function loadSettlementEvidence(storage: ContextStorage, record: SwapRecord, secret: string): Promise<SettlementEvidence | null> {
+  const evidence = await readEncrypted(storage, `leakswapSettlementEvidence:${swapRecordKey(record)}`, secret) as SettlementEvidence | null;
+  if (evidence) validateSettlementEvidence(evidence);
+  return evidence;
+}
+
+export async function saveSettlementEvidence(storage: ContextStorage, record: SwapRecord, evidence: SettlementEvidence, secret: string): Promise<void> {
+  validateSettlementEvidence(evidence);
+  const previous = await loadSettlementEvidence(storage, record, secret);
+  if (previous && JSON.stringify(previous) !== JSON.stringify(evidence)) throw new Error('Saved settlement evidence cannot be replaced.');
+  await writeEncrypted(storage, `leakswapSettlementEvidence:${swapRecordKey(record)}`, evidence, secret);
+}
+
 export function validateSwapRecord(value: unknown): asserts value is SwapRecord {
   const record = value as SwapRecord | null;
   if (!record || record.version !== 1 || !HASH.test(record.genesisHash)
@@ -43,6 +70,10 @@ export function validateSwapRecord(value: unknown): asserts value is SwapRecord 
     || !Number.isSafeInteger(record.t0) || record.t0 < 0 || !Number.isSafeInteger(record.t1) || record.t1 <= record.t0
     || !record.context) throw new Error('Invalid saved swap record.');
   validateCombinedContext(record.context, record.context);
+  if (record.settlement && (!['claim', 'refund', 'punish'].includes(record.settlement.kind)
+    || !/^[A-Z2-7]{52}$/.test(record.settlement.txId) || !/^[1-9][0-9]*$/.test(record.settlement.confirmedRound))) {
+    throw new Error('Invalid saved settlement.');
+  }
   if (record.agreementDigest !== undefined && !/^[0-9a-f]{64}$/.test(record.agreementDigest)) throw new Error('Invalid saved agreement digest.');
 }
 
@@ -76,12 +107,17 @@ export async function saveSwapRecord(storage: ContextStorage, record: SwapRecord
   const previous = await readEncrypted(storage, key, secret);
   if (previous !== null) {
     validateSwapRecord(previous);
-    const previousIdentity = { ...previous, context: { ...previous.context, restoreHeight: 0 } };
-    const identity = { ...record, context: { ...record.context, restoreHeight: 0 } };
+    const previousIdentity = { ...previous, settlement: undefined, context: { ...previous.context, restoreHeight: 0 } };
+    const identity = { ...record, settlement: undefined, context: { ...record.context, restoreHeight: 0 } };
     if (JSON.stringify(previousIdentity) !== JSON.stringify(identity)) throw new Error('Saved swap identity cannot be replaced.');
+    if (previous.settlement && record.settlement && JSON.stringify(previous.settlement) !== JSON.stringify(record.settlement)) throw new Error('Confirmed settlement cannot be replaced.');
   }
-  await writeEncrypted(storage, key, { ...record, context: { ...record.context,
-    restoreHeight: Math.min((previous as SwapRecord | null)?.context.restoreHeight ?? record.context.restoreHeight, record.context.restoreHeight) } }, secret);
+  await writeEncrypted(storage, key, {
+    ...record, ...((previous as SwapRecord | null)?.settlement ? { settlement: (previous as SwapRecord).settlement } : {}), context: {
+      ...record.context,
+      restoreHeight: Math.min((previous as SwapRecord | null)?.context.restoreHeight ?? record.context.restoreHeight, record.context.restoreHeight)
+    }
+  }, secret);
 }
 
 export async function listSwapRecords(storage: ContextStorage, secret: string): Promise<SwapRecord[]> {

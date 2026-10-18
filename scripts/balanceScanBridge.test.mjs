@@ -12,10 +12,12 @@ function setup(postError) {
   let disconnected = 0;
   let heartbeat;
   let timerCleared = false;
-  const runtime = { connect(options) {
-    assert.equal(options.name, 'monero:balanceScan');
-    return port;
-  } };
+  const runtime = {
+    connect(options) {
+      assert.equal(options.name, 'monero:balanceScan');
+      return port;
+    }
+  };
   const port = {
     onMessage: { addListener(listener) { receive = listener; } },
     onDisconnect: { addListener(listener) { disconnect = listener; } },
@@ -25,7 +27,8 @@ function setup(postError) {
   const source = ts.transpileModule(readFileSync(new URL('../lib/network/messages.ts', import.meta.url), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  runInNewContext(source, { exports: api, DOMException, Error, console,
+  runInNewContext(source, {
+    exports: api, DOMException, Error, console,
     setInterval(callback, milliseconds) { assert.equal(milliseconds, 10000); heartbeat = callback; return 1; },
     clearInterval(timer) { assert.equal(timer, 1); timerCleared = true; },
     require: () => ({ browser: { runtime } }),

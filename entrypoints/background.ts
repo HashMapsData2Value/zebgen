@@ -3,26 +3,24 @@ import { browser } from 'wxt/browser';
 import { probeMoneroDaemon, scanMoneroBalance } from '../lib/monero/moneroDaemon';
 import type { BackgroundMessage } from '../lib/network/messages';
 import { approveOrigin, isOriginApproved } from '../lib/provider/originApproval';
+import { approveConnection, assertConnectionAccounts, connectedAccounts, publicConnectionAccounts, type ConnectionAccounts } from '../lib/provider/connectionApproval';
+import { activateConnectionSelection } from '../lib/provider/connectionSelection';
 import { validateProviderRequest } from '../lib/provider/fundingValidation';
 import type {
   PendingRequestMessage,
   PendingZebgenRequest,
   ZebgenBackgroundRequest,
   ZebgenBackgroundResponse,
+  ZebgenDepositLeakSwapMoneroParams,
+  ZebgenDepositLeakSwapMoneroResult,
 } from '../lib/provider/types';
-import { getSignedInState } from '../lib/wallet/algoWallet';
-import { getMoneroWalletState } from '../lib/wallet/moneroVault';
-import { discardPreparedTransactions, prepareTransaction, submitPreparedTransaction } from '../lib/wallet/transactionService';
+import { discardPreparedTransactions, prepareTransaction, submitPreparedTransaction, isSubmittedDepositResult } from '../lib/wallet/transactionService';
 import { readTransactionStatus } from '../lib/wallet/transactionStatus';
-
-// Request types answerable straight from cached wallet-meta (public
-// addresses only) once the origin has already been approved once.
-const FAST_PATH_TYPES = new Set(['connect']);
 
 // Requests parked while an approval popup window is open, waiting on the
 // user. Module-level state is fine here: an in-flight async onMessage
 // listener keeps the MV3 service worker alive until sendResponse fires.
-const pendingRequests = new Map<string, PendingZebgenRequest>();
+const pendingRequests = new Map<string, PendingZebgenRequest & { connectionAccounts?: ConnectionAccounts }>();
 const pendingResolvers = new Map<string, (response: ZebgenBackgroundResponse) => void>();
 
 export default defineBackground(() => {
@@ -123,35 +121,25 @@ async function handleProviderRequest(request: ZebgenBackgroundRequest): Promise<
   } catch (error) {
     return errorResponse(error);
   }
-  const approved = await isOriginApproved(request.origin);
-
-  if (approved && FAST_PATH_TYPES.has(request.type)) {
-    try {
-      return { ok: true, result: await resolveFastPath(request) };
-    } catch (err) {
-      return errorResponse(err);
+  try {
+    if (request.type !== 'connect') {
+      await assertConnectionAccounts(request.origin, request.params);
     }
+  } catch (err) {
+    return errorResponse(err);
   }
 
   return openApprovalWindow(request);
 }
 
-async function resolveFastPath(request: ZebgenBackgroundRequest): Promise<unknown> {
-  if (request.type === 'connect') {
-    const [signedIn, moneroState] = await Promise.all([getSignedInState(), getMoneroWalletState()]);
-    const activeMonero = moneroState.wallets.find((wallet) => wallet.id === moneroState.activeWalletId);
-    return { algoAddress: signedIn.algoAddress ?? null, moneroAddress: activeMonero?.address ?? null };
-  }
-  throw new Error(`Unsupported fast-path request type: ${request.type}`);
-}
-
 async function openApprovalWindow(request: ZebgenBackgroundRequest): Promise<ZebgenBackgroundResponse> {
-  const pending: PendingZebgenRequest = {
+  const pending: PendingZebgenRequest & { connectionAccounts?: ConnectionAccounts } = {
     id: request.id,
     type: request.type,
     params: request.params,
     origin: request.origin,
     createdAt: Date.now(),
+    connectionAccounts: request.type === 'connect' ? undefined : await connectedAccounts(request.origin) ?? undefined,
   };
   pendingRequests.set(request.id, pending);
 
@@ -162,7 +150,12 @@ async function openApprovalWindow(request: ZebgenBackgroundRequest): Promise<Zeb
   const popupUrl = browser.runtime.getURL(`/popup.html?zebgenRequestId=${request.id}`);
   const win = await browser.windows.create({ url: popupUrl, type: 'popup', width: 380, height: 640 });
 
+  const onDepositClosed = (windowId: number) => {
+    if (windowId === win?.id) pendingResolvers.get(request.id)?.({ ok: false, error: 'Deposit window closed. Check outgoing activity before retrying if Send was pressed.' });
+  };
+  if (request.type === 'depositLeakSwapMonero') browser.windows.onRemoved.addListener(onDepositClosed);
   const response = await responsePromise;
+  if (request.type === 'depositLeakSwapMonero') browser.windows.onRemoved.removeListener(onDepositClosed);
   pendingRequests.delete(request.id);
   pendingResolvers.delete(request.id);
   if (win?.id !== undefined) {
@@ -182,9 +175,33 @@ async function handlePendingRequestMessage(message: PendingRequestMessage): Prom
 
   // action === 'resolve'
   const pending = pendingRequests.get(message.id);
-  if (message.ok && pending) {
-    await approveOrigin(pending.origin);
+  let result = message.result;
+  try {
+    if (message.ok && pending) {
+      if (pending.type === 'connect') {
+        const accounts = message.result as ConnectionAccounts;
+        await activateConnectionSelection(accounts);
+        await approveConnection(pending.origin, accounts);
+        result = publicConnectionAccounts(accounts);
+        await approveOrigin(pending.origin);
+      } else if (pending.type === 'depositLeakSwapMonero') {
+        if (!isSubmittedDepositResult(pending.params as ZebgenDepositLeakSwapMoneroParams, result as ZebgenDepositLeakSwapMoneroResult)) {
+          throw new Error('No matching submitted deposit receipt is available. Check outgoing activity before depositing again.');
+        }
+        try { await assertConnectionAccounts(pending.origin, pending.params, pending.connectionAccounts); }
+        catch (error) {
+          console.error('Accounts changed after deposit relay; preserving receipt', error);
+          result = { ...(result as ZebgenDepositLeakSwapMoneroResult), accountStatus: 'changed' };
+        }
+      } else {
+        await assertConnectionAccounts(pending.origin, pending.params, pending.connectionAccounts);
+      }
+    }
+  } catch (error) {
+    const failure = errorResponse(error);
+    pendingResolvers.get(message.id)?.(failure);
+    return failure;
   }
-  pendingResolvers.get(message.id)?.({ ok: message.ok, result: message.result, error: message.error });
+  pendingResolvers.get(message.id)?.({ ok: message.ok, result, error: message.error });
   return { ok: true };
 }

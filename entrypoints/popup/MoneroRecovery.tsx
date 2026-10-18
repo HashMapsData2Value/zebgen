@@ -44,12 +44,12 @@ export default function MoneroRecovery({ material }: { material: MoneroKeyMateri
       ) : (
         <>
           {deterministic ? <>
-          <div className="seed-reveal-words">
-            {mnemonic.split(' ').map((word, index) => (
-              <span className="seed-word" key={`${word}-${index}`}><span className="seed-word-index">{index + 1}</span>{word}</span>
-            ))}
-          </div>
-          <CopyValue value={mnemonic} label="recovery phrase" />
+            <div className="seed-reveal-words">
+              {mnemonic.split(' ').map((word, index) => (
+                <span className="seed-word" key={`${word}-${index}`}><span className="seed-word-index">{index + 1}</span>{word}</span>
+              ))}
+            </div>
+            <CopyValue value={mnemonic} label="recovery phrase" />
           </> : null}
           <MoneroKeyList material={material} includeSecrets />
           <button className="secondary" type="button" onClick={() => setRevealed(false)}>Hide recovery details</button>

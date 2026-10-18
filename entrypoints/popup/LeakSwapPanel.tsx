@@ -1,4 +1,4 @@
-import { ArrowLeftRight, ExternalLink, Plus, RefreshCw } from 'lucide-react';
+import { ArrowLeftRight, ExternalLink, KeyRound, Plus, RefreshCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { browser } from 'wxt/browser';
 import algosdk from 'algosdk';
@@ -9,18 +9,22 @@ import { getNetworkSettings } from '../../lib/network/networkStore';
 import { formatAtomic } from '../../lib/wallet/formatAtomic';
 import { readSwapChainStatus, type SavedSwapStatus } from '../../lib/wallet/swapChainStatus';
 import { swapStatus } from '../../lib/wallet/swapStatus';
+import { listSwapShares } from '../../lib/wallet/swapShareVault';
+import SwapRecoveryTools from './SwapRecoveryTools';
 
 interface LeakSwapPanelProps {
   lockSecret?: string | null;
+  onRecover?: () => void;
 }
 
-export default function LeakSwapPanel({ lockSecret }: LeakSwapPanelProps) {
+export default function LeakSwapPanel({ lockSecret, onRecover }: LeakSwapPanelProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [swaps, setSwaps] = useState<SavedSwapStatus[]>([]);
+  const [shares, setShares] = useState<Awaited<ReturnType<typeof listSwapShares>>>([]);
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
   const [refresh, setRefresh] = useState(0);
-  useEffect(() => { setSwaps([]); setError(null); }, [lockSecret]);
+  useEffect(() => { setSwaps([]); setShares([]); setError(null); }, [lockSecret]);
   useEffect(() => {
     const clock = window.setInterval(() => setNow(Math.floor(Date.now() / 1000)), 10000);
     const reload = window.setInterval(() => setRefresh(value => value + 1), 60000);
@@ -33,6 +37,9 @@ export default function LeakSwapPanel({ lockSecret }: LeakSwapPanelProps) {
     setLoading(true);
     setError(null);
     async function load() {
+      const inventory = await listSwapShares(secret);
+      if (cancelled) return;
+      setShares(inventory);
       const records = await listSwapRecords(browser.storage.local, secret);
       if (cancelled) return;
       if (!records.length) { setSwaps([]); return; }
@@ -89,6 +96,7 @@ export default function LeakSwapPanel({ lockSecret }: LeakSwapPanelProps) {
     <h2>LeakSwap</h2>
     <div className="swap-pair" aria-label="Algorand to Monero"><img src={algorandLogo} alt="" /><strong>Algorand</strong><ArrowLeftRight size={18} /><strong>Monero</strong><img src={moneroLogo} alt="" /></div>
     <a className="app-link new-swap" href="https://app.leakswap.com/swap" target="_blank" rel="noreferrer"><Plus size={18} /> New Swap <ExternalLink size={16} /></a>
+    {onRecover ? <button type="button" className="secondary" onClick={onRecover}><KeyRound size={18} /> Recover combined wallet</button> : null}
     <div className="swap-list-heading"><h3>Active swaps ({active.length})</h3>
       <button type="button" className="icon-btn" title="Refresh swap status" aria-label="Refresh swap status" disabled={loading} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={18} className={loading ? 'is-spinning' : ''} /></button>
     </div>
@@ -101,5 +109,19 @@ export default function LeakSwapPanel({ lockSecret }: LeakSwapPanelProps) {
       <summary>Archived swaps ({history.length})</summary>
       {history.map(swapRow)}
     </details> : null}
+    <SwapRecoveryTools lockSecret={lockSecret} />
+    <details className="swap-archive" aria-label="LeakSwap key shares">
+      <summary>LeakSwap key shares ({shares.length})</summary>
+      {shares.map(share => <article className="swap-list-item" key={share.walletId}>
+        <h4>Swap key share</h4>
+        <dl className="swap-facts">
+          <dt>Offer digest</dt><dd style={{ overflowWrap: 'anywhere' }}>{share.digest}</dd>
+          <dt>Monero network</dt><dd>{share.network}</dd>
+          <dt>Algorand identity</dt><dd style={{ overflowWrap: 'anywhere' }}>{share.algoAddress}</dd>
+          <dt>Algorand genesis</dt><dd style={{ overflowWrap: 'anywhere' }}>{share.genesisHash}</dd>
+          <dt>Created</dt><dd>{new Date(share.createdAt).toLocaleString()}</dd>
+        </dl>
+      </article>)}
+    </details>
   </section>;
 }

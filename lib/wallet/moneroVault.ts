@@ -9,6 +9,7 @@ import {
   setWalletMeta,
 } from './db';
 import { unlockWallet } from './algoWallet';
+import { unlockSwapShare, listCurrentSwapShares } from './swapShareVault';
 import {
   getMoneroKeyMaterialFromPrivateSpendKey,
   getCompleteAddressFromPrivate,
@@ -30,7 +31,8 @@ import {
 async function verifyCombinedContextOwner(context: CombinedAddressContext, secret: string): Promise<void> {
   const networkType = context.network === 'testnet' ? MoneroNetworkType.TESTNET
     : context.network === 'stagenet' ? MoneroNetworkType.STAGENET : MoneroNetworkType.MAINNET;
-  const material = await unlockMoneroWallet(secret, networkType, context.walletId);
+  const material = context.walletId < 0 ? await unlockSwapShare(context.walletId, secret, context.network)
+    : await unlockMoneroWallet(secret, networkType, context.walletId);
   if (!material) throw new Error('The original Monero wallet is required for this saved context.');
   const combined = computeCombinedAddressWithPrivateAndPublic(material.privateSpendKey, material.privateViewKey,
     context.counterpartyPrivateViewKey, context.counterpartyPublicSpendKey, networkType);
@@ -51,10 +53,11 @@ export async function loadMoneroCombinedContext(binding: CombinedAddressBinding,
   return context;
 }
 
-export async function listMoneroCombinedContexts(walletId: number, network: CombinedAddressBinding['network'], secret: string): Promise<CombinedAddressContext[]> {
+export async function listMoneroCombinedContexts(walletId: number | null, network: CombinedAddressBinding['network'], secret: string): Promise<CombinedAddressContext[]> {
   await unlockWallet(secret);
+  const shares = await listCurrentSwapShares(secret);
   const bindings = (await listCombinedContextBindings(browser.storage.local))
-    .filter((binding) => binding.walletId === walletId && binding.network === network);
+    .filter((binding) => (binding.walletId === walletId || shares.some(share => share.walletId === binding.walletId)) && binding.network === network);
   const contexts: CombinedAddressContext[] = [];
   for (const binding of bindings) {
     const context = await loadMoneroCombinedContext(binding, secret);
@@ -96,7 +99,8 @@ export async function getMoneroWalletState(): Promise<MoneroWalletState> {
 export async function saveMoneroWallet(
   material: MoneroKeyMaterial,
   lockSecret: string,
-  restoreHeight?: number
+  restoreHeight?: number,
+  activate = true
 ): Promise<number> {
   await unlockWallet(lockSecret);
   const privateSpendKeyBytes = hexToBytes(material.privateSpendKey);
@@ -120,7 +124,7 @@ export async function saveMoneroWallet(
     if (!meta) {
       throw new Error('Wallet metadata is unavailable.');
     }
-    await setWalletMeta({
+    if (activate) await setWalletMeta({
       ...meta,
       activeMoneroKeyId,
       moneroAddress: material.address,
@@ -138,6 +142,7 @@ export async function unlockMoneroWallet(
   walletId?: number
 ): Promise<MoneroKeyMaterial | null> {
   await unlockWallet(lockSecret);
+  if (walletId !== undefined && walletId < 0) return unlockSwapShare(walletId, lockSecret);
   const meta = await getWalletMeta();
   const activeMoneroKeyId = walletId ?? meta?.activeMoneroKeyId;
   if (!activeMoneroKeyId) {

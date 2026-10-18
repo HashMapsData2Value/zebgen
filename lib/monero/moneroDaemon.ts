@@ -211,8 +211,8 @@ export async function createMoneroTransaction(
       relayed: boolean;
       txHex: string;
     } = request.sweep
-      ? await sweepTransaction(...wallet, request.relay)
-      : await createTransaction(...wallet, amountAtomic.toString(), request.relay);
+        ? await sweepTransaction(...wallet, request.relay)
+        : await createTransaction(...wallet, amountAtomic.toString(), request.relay);
     return {
       ok: true,
       hash: transaction.hash,

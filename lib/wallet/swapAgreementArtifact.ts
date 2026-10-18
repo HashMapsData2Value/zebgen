@@ -10,9 +10,11 @@ export function assertAgreementPrograms(approval: Uint8Array, clear: Uint8Array)
 }
 
 export async function agreementSponsorAddress(algod: algosdk.Algodv2, appId: bigint, agreement: SwapAgreement): Promise<string> {
-  const values: Record<string, string> = { TMPL_APP_ID: appId.toString(),
+  const values: Record<string, string> = {
+    TMPL_APP_ID: appId.toString(),
     TMPL_ALI_ADDR: `0x${bytesToHex(algosdk.decodeAddress(agreement.offer.payload.aliAlgoAddress).publicKey)}`,
-    TMPL_XIN_ADDR: `0x${bytesToHex(algosdk.decodeAddress(agreement.acceptance.payload.xinAlgoAddress).publicKey)}` };
+    TMPL_XIN_ADDR: `0x${bytesToHex(algosdk.decodeAddress(agreement.acceptance.payload.xinAlgoAddress).publicKey)}`
+  };
   const source = sponsorTemplate.replace(/\bTMPL_(?:APP_ID|ALI_ADDR|XIN_ADDR)\b/g, (token) => values[token]);
   const result = await algod.compile(new TextEncoder().encode(source)).do();
   return new algosdk.LogicSigAccount(base64ToBytes(result.result)).address().toString();

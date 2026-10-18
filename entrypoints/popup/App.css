@@ -12,6 +12,9 @@
 }
 
 .header-actions { display: flex; align-items: center; gap: 0.4rem; }
+.swap-fee-disclosure { font-size: 0.75rem; color: #c5c4ca; }
+.swap-fee-disclosure dl { gap: 0.3rem 0.6rem; }
+.swap-fee-disclosure p.hint { font-size: inherit; }
 .swap-pair { display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 1rem 0; }
 .swap-pair img { width: 24px; height: 24px; object-fit: contain; }
 .swap-pair svg { flex-shrink: 0; color: #8bd6b2; }
@@ -41,6 +44,11 @@
 }
 .chain-tabs img { width: 20px; height: 20px; object-fit: contain; flex-shrink: 0; }
 .chain-tabs svg { flex-shrink: 0; }
+.connect-wallet-pickers { display: grid; gap: 0.75rem; min-width: 0; }
+.swap-support-report { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.75rem; max-height: 24rem; overflow-y: auto; }
+.swap-archive select { max-width: 100%; min-width: 0; }
+.connect-wallet-pickers label { display: grid; gap: 0.35rem; min-width: 0; }
+.connect-wallet-pickers select { width: 100%; min-width: 0; max-width: 100%; padding: 0.6rem; background: #19161f; color: #eee; border: 1px solid #69616f; border-radius: 4px; }
 .account-selector { display: flex; align-items: center; gap: 0.6rem; margin: 0 0 0.8rem; }
 .account-selector label { font-size: 0.8rem; color: #c9bfd6; }
 .account-selector select {
@@ -386,6 +394,12 @@ h2 {
   flex-direction: column;
   gap: 0.75rem;
 }
+
+.receipt-destination { display: block; overflow-wrap: anywhere; font-size: 0.8rem; margin-top: 0.35rem; }
+.transaction-result details { margin: 0.65rem 0; min-width: 0; }
+.transaction-result summary, .transaction-scan-settings summary { cursor: pointer; padding: 0.3rem 0; }
+.transaction-result dd { margin: 0.25rem 0 0.75rem; overflow-wrap: anywhere; }
+.transaction-scan-settings > input { box-sizing: border-box; width: 100%; }
 
 .transaction-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 0.5rem; }
 .monero-balance { border-top: 1px solid #50445d; padding: 0.75rem 0; }

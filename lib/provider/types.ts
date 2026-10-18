@@ -10,6 +10,8 @@ export type ZebgenRequestType =
   | 'computeCombinedMoneroAddress'
   | 'scanCombinedMoneroFunding'
   | 'saveLeakSwap'
+  | 'depositLeakSwapMonero'
+  | 'recoverLeakSwapMonero'
   | 'listLeakSwaps'
   | 'createSwapInvite'
   | 'acceptSwapInvite'
@@ -23,12 +25,26 @@ export interface ZebgenConnectResult {
 }
 
 export interface ZebgenSaveLeakSwapParams {
+  settlementTxId?: string;
   agreementDigest?: string;
   appId: string;
   combinedAddress: string;
 }
 
+export interface ZebgenDepositLeakSwapMoneroParams {
+  agreementDigest: string;
+  appId: string;
+}
+
+export interface ZebgenDepositLeakSwapMoneroResult {
+  transactionHash: string;
+  amountAtomic: string;
+  feeAtomic: string;
+  accountStatus?: 'changed';
+}
+
 export interface ZebgenSavedLeakSwap {
+  settlement?: { kind: 'claim' | 'refund' | 'punish'; txId: string; confirmedRound: string };
   agreement?: import('leakswap-utils/dist/swapAgreement.js').SwapAgreement;
   appId: string;
   appAddress: string;
@@ -56,6 +72,7 @@ export interface ZebgenGetAlgorandAddressResult {
 }
 
 export interface ZebgenGetMoneroShareInfoParams {
+  agreementDigest?: string;
   moneroWalletId?: number;
 }
 
@@ -66,6 +83,7 @@ export interface ZebgenGetMoneroShareInfoResult {
 }
 
 export interface ZebgenComputeCombinedMoneroAddressParams {
+  agreementDigest?: string;
   moneroWalletId?: number;
   counterpartyPrivateViewKey: string;
   counterpartyPublicSpendKey: string;
@@ -117,6 +135,8 @@ export interface ZebgenSignAlgorandTransactionsResult {
 // sensitive operation the wallet can perform - it must always go through
 // the popup approval flow, never a fast path.
 export interface ZebgenComputeMoneroLeakySignatureParams {
+  agreementDigest?: string;
+  agreementAppId?: string;
   moneroWalletId?: number;
   messageHex: string;
 }

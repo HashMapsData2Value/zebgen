@@ -49,6 +49,7 @@ import { recoverCombinedWallet } from '../../lib/wallet/combinedRecovery';
 import type { CombinedAddressContext } from '../../lib/wallet/combinedAddressContext';
 import AlgorandAddressCard from './AlgorandAddressCard';
 import MoneroAddressCard from './MoneroAddressCard';
+import MoneroActivity from './MoneroActivity';
 import MoneroKeyList from './MoneroKeyList';
 import NetworkSettingsPanel from './NetworkSettings';
 import RevealSeedPhrase from './RevealSeedPhrase';
@@ -107,6 +108,25 @@ function App({ variant = 'popup' }: AppProps) {
   const [combinedAddressFromPriv, setCombinedAddressFromPriv] = useState('');
   const [combinedAddressFromPublic, setCombinedAddressFromPublic] = useState('');
   const [networkSettings, setNetworkSettings] = useState<NetworkSettings | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      getMoneroWalletState().then(state => {
+        if (active) setMoneroWallets(state.wallets);
+      }).catch(error => console.error('Unable to refresh Monero wallet inventory', error));
+    };
+    const onVisibility = () => { if (document.visibilityState === 'visible') refresh(); };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', onVisibility);
+    const inventoryTimer = window.setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 5000);
+    return () => {
+      active = false;
+      window.clearInterval(inventoryTimer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -171,7 +191,7 @@ function App({ variant = 'popup' }: AppProps) {
     setRecoveryContexts([]);
     setRecoveryAddress('');
     setRecoveredMaterial(null);
-    if (moneroView !== 'recover' || !sessionLockSecret || !networkSettings || activeMoneroWalletId === null) {
+    if (moneroView !== 'recover' || !sessionLockSecret || !networkSettings) {
       setIsLoadingRecovery(false);
       return;
     }
@@ -376,11 +396,11 @@ function App({ variant = 'popup' }: AppProps) {
       const importedValue = importedPrivateSpendKey.trim();
       const material = moneroSetupMode === 'import'
         ? getMoneroKeyMaterialFromPrivateSpendKey(
-            importedValue.includes(' ')
-              ? moneroMnemonicToPrivateKey(importedValue)
-              : importedValue,
-            networkSettings.monero.networkType
-          )
+          importedValue.includes(' ')
+            ? moneroMnemonicToPrivateKey(importedValue)
+            : importedValue,
+          networkSettings.monero.networkType
+        )
         : moneroMaterial;
       if (!material) {
         throw new Error('Generate or import Monero key material first.');
@@ -449,20 +469,23 @@ function App({ variant = 'popup' }: AppProps) {
     }
   }
 
-  function onRecoverCombinedWallet(event: FormEvent<HTMLFormElement>) {
+  async function onRecoverCombinedWallet(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
     setRecoveredMaterial(null);
-    if (!moneroMaterial || !networkSettings) {
+    if (!sessionLockSecret || !networkSettings) {
       setError('Open your Monero wallet first.');
       return;
     }
+    setIsSubmitting(true);
     try {
       const context = recoveryContexts.find((saved) => saved.combinedAddress === recoveryAddress);
       if (!context || isLoadingRecovery) throw new Error('Select a saved combined address first.');
+      const owner = await unlockMoneroWallet(sessionLockSecret, networkSettings.monero.networkType, context.walletId);
+      if (!owner) throw new Error('Original swap key material is unavailable.');
       setRecoveredMaterial(
         recoverCombinedWallet(
-          moneroMaterial,
+          owner,
           counterpartyPrivateSpendKey.trim(),
           context,
           networkSettings.monero.networkType
@@ -470,6 +493,8 @@ function App({ variant = 'popup' }: AppProps) {
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to recover the combined wallet.');
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
@@ -611,25 +636,25 @@ function App({ variant = 'popup' }: AppProps) {
           <h1>Zebgen Wallet</h1>
         </div>
         <div className="header-actions">
-        {isUnlocked && selectedWalletType !== 'leakswap' ? <button type="button" className="icon-btn" title="Network settings" aria-label="Network settings" onClick={() => {
-          if (selectedWalletType === 'algorand') setAlgorandView('settings');
-          else setMoneroView('settings');
-        }}><Settings size={18} /></button> : null}
-        {isUnlocked ? <button type="button" className="icon-btn" onClick={onLockWallet} title="Lock wallet" aria-label="Lock wallet"><LockKeyhole size={18} /></button> : null}
-        {variant === 'popup' ? (
-          <button
-            type="button"
-            className="icon-btn"
-            title="Open in full window"
-            aria-label="Open in full window"
-            onClick={() => {
-              browser.tabs.create({ url: browser.runtime.getURL('/dashboard.html') });
-              window.close();
-            }}
-          >
-            <Maximize2 size={18} />
-          </button>
-        ) : null}
+          {isUnlocked && selectedWalletType !== 'leakswap' ? <button type="button" className="icon-btn" title="Network settings" aria-label="Network settings" onClick={() => {
+            if (selectedWalletType === 'algorand') setAlgorandView('settings');
+            else setMoneroView('settings');
+          }}><Settings size={18} /></button> : null}
+          {isUnlocked ? <button type="button" className="icon-btn" onClick={onLockWallet} title="Lock wallet" aria-label="Lock wallet"><LockKeyhole size={18} /></button> : null}
+          {variant === 'popup' ? (
+            <button
+              type="button"
+              className="icon-btn"
+              title="Open in full window"
+              aria-label="Open in full window"
+              onClick={() => {
+                browser.tabs.create({ url: browser.runtime.getURL('/dashboard.html') });
+                window.close();
+              }}
+            >
+              <Maximize2 size={18} />
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -847,6 +872,7 @@ function App({ variant = 'popup' }: AppProps) {
             {mnemonicMode === 'generate' ? (
               <>
                 <label htmlFor="generated-mnemonic">Recovery mnemonic</label>
+                <p className="seed-warning">Write down these 24 words in order and keep them somewhere safe offline. They recover your Algorand wallet. Never share them.</p>
                 <textarea
                   id="generated-mnemonic"
                   className="mnemonic-input mnemonic-valid"
@@ -873,10 +899,10 @@ function App({ variant = 'popup' }: AppProps) {
       ) : null}
 
       {!isLoading &&
-      isLockConfigured &&
-      isUnlocked &&
-      selectedWalletType === 'monero' &&
-      moneroView === 'add' ? (
+        isLockConfigured &&
+        isUnlocked &&
+        selectedWalletType === 'monero' &&
+        moneroView === 'add' ? (
         <section className="card">
           <h2 className="chain-title">
             <img className="chain-logo" src={moneroLogo} alt="" />
@@ -962,6 +988,10 @@ function App({ variant = 'popup' }: AppProps) {
             </button>
             <button type="button" className="secondary" onClick={() => setMoneroView('receive')}><ArrowDownLeft size={18} />Receive</button>
           </div>
+          {networkSettings && moneroMaterial && sessionLockSecret ? <MoneroActivity
+            key={JSON.stringify([moneroMaterial.address, networkSettings.monero])}
+            address={moneroMaterial.address} config={networkSettings.monero} lockSecret={sessionLockSecret}
+          /> : null}
           <div className="wallet-action-grid">
             <button
               type="button"
@@ -978,7 +1008,7 @@ function App({ variant = 'popup' }: AppProps) {
       ) : null}
 
       {isUnlocked && selectedWalletType === 'leakswap' && moneroView !== 'combine' && moneroView !== 'recover' ?
-        <LeakSwapPanel key={`${networkSettings?.algorand.network}-${networkSettings?.algorand.algod.server}`} lockSecret={sessionLockSecret} /> : null}
+        <LeakSwapPanel key={`${networkSettings?.algorand.network}-${networkSettings?.algorand.algod.server}`} lockSecret={sessionLockSecret} onRecover={() => setMoneroView('recover')} /> : null}
       {isUnlocked && selectedWalletType === 'monero' && moneroMaterial && networkSettings && moneroView === 'receive' ?
         <Receive chain="monero" address={moneroMaterial.address} network={networkSettings.monero.network} /> : null}
 

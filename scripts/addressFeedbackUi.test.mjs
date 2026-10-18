@@ -15,30 +15,36 @@ import { keccak_256 } from '@noble/hashes/sha3.js';
 
 function render(component, props, recipient = '', states = {}) {
   const source = readFileSync(new URL(`../entrypoints/popup/${component}.tsx`, import.meta.url), 'utf8');
-  const compiled = ts.transpileModule(source, { compilerOptions: {
-    module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX,
-  } }).outputText;
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX,
+    }
+  }).outputText;
   let stateIndex = 0;
   const api = {};
-  runInNewContext(compiled, { exports: api, require: name => {
-    if (name === 'react/jsx-runtime') return jsx;
-    if (name === 'react') return { ...react, useEffect: () => {}, useState: initial => {
-      const index = stateIndex++;
-      return [Object.hasOwn(states, index) ? states[index] : index === 0 ? recipient : initial, () => {}];
-    } };
-    if (name === 'lucide-react') return new Proxy({}, { get: () => () => react.createElement('svg', { width: 18, height: 18 }) });
-    if (name.endsWith('/formatAtomic')) return { formatAtomic };
-    if (name.endsWith('/addressValidation')) return validation;
-    if (name.endsWith('/networks')) return { networkLabel: value => value };
-    if (name.endsWith('/paymentUri')) return { paymentUri: (_chain, address) => address };
-    if (name === 'qrcode.react') return { QRCodeSVG: () => react.createElement('svg', { 'aria-label': 'Receiving address' }) };
-    if (name === './CopyValue') return { default: () => react.createElement('button', {}, 'Copy address') };
-    if (['./LeakSwapPanel', './NetworkSettings', './RevealSeedPhrase', './AlgorandAddressCard', './ScanActivity'].includes(name)) return {
-      default: () => react.createElement('div', { 'data-component': name.slice(2) }),
-    };
-    if (name.endsWith('/algoWallet')) return { getAlgoDerivationPath: () => 'test-path' };
-    return {};
-  } });
+  runInNewContext(compiled, {
+    exports: api, require: name => {
+      if (name === 'react/jsx-runtime') return jsx;
+      if (name === 'react') return {
+        ...react, useEffect: () => { }, useState: initial => {
+          const index = stateIndex++;
+          return [Object.hasOwn(states, index) ? states[index] : index === 0 ? recipient : initial, () => { }];
+        }
+      };
+      if (name === 'lucide-react') return new Proxy({}, { get: () => () => react.createElement('svg', { width: 18, height: 18 }) });
+      if (name.endsWith('/formatAtomic')) return { formatAtomic };
+      if (name.endsWith('/addressValidation')) return validation;
+      if (name.endsWith('/networks')) return { networkLabel: value => value };
+      if (name.endsWith('/paymentUri')) return { paymentUri: (_chain, address) => address };
+      if (name === 'qrcode.react') return { QRCodeSVG: () => react.createElement('svg', { 'aria-label': 'Receiving address' }) };
+      if (name === './CopyValue') return { default: () => react.createElement('button', {}, 'Copy address') };
+      if (['./LeakSwapPanel', './NetworkSettings', './RevealSeedPhrase', './AlgorandAddressCard', './ScanActivity', './MoneroChainHeight'].includes(name)) return {
+        default: () => react.createElement('div', { 'data-component': name.slice(2) }),
+      };
+      if (name.endsWith('/algoWallet')) return { getAlgoDerivationPath: () => 'test-path' };
+      return {};
+    }
+  });
   return renderToStaticMarkup(react.createElement(api.default, props));
 }
 
@@ -95,6 +101,14 @@ test('amount feedback rejects excess, reserves fees and ignores unrelated balanc
       : [chain, address, settings.walletId, settings.config, '0']);
     const balance = { key, atomic };
     const invalid = render('TransactionBuilder', settings, address, { 1: excess, 11: balance });
+    if (chain === 'monero') {
+      assert.match(invalid, /Last verified unlocked balance/);
+      assert.match(invalid, /Transaction review rechecks spendable funds and fees/);
+      assert.doesNotMatch(invalid, /Insufficient funds|type="submit" disabled/);
+      assert.match(invalid, /Update balance/);
+      assert.doesNotMatch(invalid, /class="refresh-btn"[^>]*title="Scan unlocked balance"/);
+      continue;
+    }
     assert.match(invalid, /Insufficient funds/);
     assert.match(invalid, /type="submit" disabled/);
     assert.match(invalid, /tx-amount" data-address-status="invalid" aria-invalid="true"/);

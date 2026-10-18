@@ -8,8 +8,10 @@ const context = {
 };
 function storageFixture() {
   const data = {};
-  return { data, async get(key) { return structuredClone(key === null ? data : { [key]: data[key] }); },
-    async set(items) { Object.assign(data, JSON.parse(JSON.stringify(items))); } };
+  return {
+    data, async get(key) { return structuredClone(key === null ? data : { [key]: data[key] }); },
+    async set(items) { Object.assign(data, JSON.parse(JSON.stringify(items))); }
+  };
 }
 
 test('encrypted context survives JSON storage and preserves the earliest restore height', async () => {
@@ -41,8 +43,8 @@ test('wrong passwords, ciphertext tampering, and substituted owner/network/addre
 
 test('metadata, key and height validation reject malformed context before storage', async () => {
   for (const change of [{ version: 2 }, { walletId: 0 }, { network: 'unknown' }, { combinedAddress: '' },
-    { counterpartyPrivateViewKey: 'xx'.repeat(32) }, { counterpartyPublicSpendKey: '' },
-    ...[-1, 1.5, 0x100000000, NaN, undefined].map((restoreHeight) => ({ restoreHeight }))]) {
+  { counterpartyPrivateViewKey: 'xx'.repeat(32) }, { counterpartyPublicSpendKey: '' },
+  ...[-1, 1.5, 0x100000000, NaN, undefined].map((restoreHeight) => ({ restoreHeight }))]) {
     assert.throws(() => validateCombinedContext({ ...context, ...change }, context));
   }
   const storage = storageFixture();
@@ -71,7 +73,7 @@ test('invalid encryption envelopes fail closed without replacing saved ciphertex
   const key = combinedContextStorageKey(context);
   const original = structuredClone(storage.data[key]);
   for (const change of [{ version: 2 }, { salt: [] }, { iv: [] }, { ciphertext: [-1] },
-    { ciphertext: [1.5] }, { ciphertext: 'plaintext' }]) {
+  { ciphertext: [1.5] }, { ciphertext: 'plaintext' }]) {
     storage.data[key] = { ...original, ...change };
     await assert.rejects(loadCombinedContext(storage, context, 'password'), /Invalid encrypted/);
     await assert.rejects(saveCombinedContext(storage, context, 'password'), /Invalid encrypted/);

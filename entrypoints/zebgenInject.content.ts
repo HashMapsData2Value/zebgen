@@ -1,6 +1,7 @@
 import { PROVIDER_PAGE_MATCHES } from '../lib/provider/pageMatches';
 import type { ZebgenPageRequest, ZebgenPageResponse, ZebgenRequestType } from '../lib/provider/types';
 import type { ZebgenScanCombinedMoneroFundingParams, ZebgenScanCombinedMoneroFundingResult, ZebgenSaveLeakSwapParams, ZebgenSavedLeakSwap } from '../lib/provider/types';
+import type { ZebgenDepositLeakSwapMoneroParams, ZebgenDepositLeakSwapMoneroResult } from '../lib/provider/types';
 
 // Runs in the page's own MAIN world (native MV3 `world: "MAIN"` injection, so
 // it isn't subject to the page's script-src CSP) and exposes `window.zebgen`.
@@ -53,6 +54,8 @@ export default defineContentScript({
       computeCombinedMoneroAddress: (params) => request('computeCombinedMoneroAddress', params),
       scanCombinedMoneroFunding: (params) => request('scanCombinedMoneroFunding', params),
       saveLeakSwap: (params) => request('saveLeakSwap', params),
+      depositLeakSwapMonero: (params) => request('depositLeakSwapMonero', params),
+      recoverLeakSwapMonero: (params) => request('recoverLeakSwapMonero', params),
       listLeakSwaps: () => request('listLeakSwaps'),
       createSwapInvite: (params) => request('createSwapInvite', params),
       acceptSwapInvite: (params) => request('acceptSwapInvite', params),
@@ -86,16 +89,20 @@ interface ZebgenProvider {
     acceptance: import('leakswap-utils/dist/swapHandshake.js').SignedAcceptance; link: string;
   }>;
   saveLeakSwap: (params: ZebgenSaveLeakSwapParams) => Promise<{ appId: string }>;
+  depositLeakSwapMonero: (params: ZebgenDepositLeakSwapMoneroParams) => Promise<ZebgenDepositLeakSwapMoneroResult>;
   listLeakSwaps: () => Promise<{ swaps: ZebgenSavedLeakSwap[] }>;
+  recoverLeakSwapMonero: (params: import('../lib/wallet/recoverLeakSwap').RecoverLeakSwapParams) => Promise<import('../lib/wallet/recoverLeakSwap').RecoverLeakSwapResult>;
   scanCombinedMoneroFunding: (params: ZebgenScanCombinedMoneroFundingParams) => Promise<ZebgenScanCombinedMoneroFundingResult>;
   connect: () => Promise<{ algoAddress: string | null; moneroAddress: string | null }>;
   getAlgorandAddress: (params?: {
     addressIndex?: number;
   }) => Promise<{ algoAddress: string; addressIndex: number }>;
   getMoneroShareInfo: (params?: {
+    agreementDigest?: string;
     moneroWalletId?: number;
   }) => Promise<{ address: string; publicSpendKey: string; privateViewKey: string }>;
   computeCombinedMoneroAddress: (params: {
+    agreementDigest?: string;
     moneroWalletId?: number;
     counterpartyPrivateViewKey: string;
     counterpartyPublicSpendKey: string;
@@ -108,6 +115,8 @@ interface ZebgenProvider {
     indexesToSign: number[];
   }) => Promise<{ signedTxns: string[] }>;
   computeMoneroLeakySignature: (params: {
+    agreementDigest?: string;
+    agreementAppId?: string;
     moneroWalletId?: number;
     messageHex: string;
   }) => Promise<{ signatureHex: string }>;

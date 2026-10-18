@@ -4,9 +4,11 @@ import { fromSeed, KeyContext, XHDWalletAPI, Encoding } from '@algorandfoundatio
 import { signCanonicalSwapHandshake } from '../lib/wallet/swapHandshakeSigning.ts';
 import { buildHandshakeUrl, parseHandshakeLink, encodeHandshake, decodeHandshake, handshakeSigningBytes, offerDigest, verifyHandshake } from 'leakswap-utils/dist/swapHandshake.js';
 
-const offer = { offerId: 'ab'.repeat(16), createdAt: 100, algoGenesisHash: 'A'.repeat(43) + '=',
+const offer = {
+  offerId: 'ab'.repeat(16), createdAt: 100, algoGenesisHash: 'A'.repeat(43) + '=',
   moneroNetwork: 'regtest', algoAmount: '10000000', xmrAmount: '1000000000000', t0: 200, t1: 300,
-  aliAlgoAddress: 'A'.repeat(58), aliPublicSpendKey: 'cd'.repeat(32), aliPrivateViewKey: 'ef'.repeat(32) };
+  aliAlgoAddress: 'A'.repeat(58), aliPublicSpendKey: 'cd'.repeat(32), aliPrivateViewKey: 'ef'.repeat(32)
+};
 const unsigned = { kind: 'invite', payload: offer, signature: '00'.repeat(64) };
 
 async function hostileHandshakeValue(bytes, kind = 'invite') {
@@ -38,12 +40,16 @@ test('checksummed hostile links reject oversized, invalid UTF-8, invalid JSON an
 });
 
 test('checksummed invite and acceptance links reject malformed public spend keys', async (context) => {
-  const acceptance = { kind: 'accept', payload: { offerDigest: await offerDigest(offer), xinAlgoAddress: 'B'.repeat(58),
-    xinPublicSpendKey: '01'.repeat(32), xinPrivateViewKey: '02'.repeat(32) }, signature: unsigned.signature };
+  const acceptance = {
+    kind: 'accept', payload: {
+      offerDigest: await offerDigest(offer), xinAlgoAddress: 'B'.repeat(58),
+      xinPublicSpendKey: '01'.repeat(32), xinPrivateViewKey: '02'.repeat(32)
+    }, signature: unsigned.signature
+  };
   for (const message of [unsigned, acceptance]) {
     const field = message.kind === 'invite' ? 'aliPublicSpendKey' : 'xinPublicSpendKey';
     for (const [label, key] of [['short', 'ab'.repeat(31)], ['long', 'ab'.repeat(33)],
-      ['nonhex', 'gg'.repeat(32)], ['uppercase', 'AB'.repeat(32)], ['nonstring', Array(32).fill(1)]]) {
+    ['nonhex', 'gg'.repeat(32)], ['uppercase', 'AB'.repeat(32)], ['nonstring', Array(32).fill(1)]]) {
       await context.test(`${message.kind}: ${label}`, async () => {
         const hostile = { ...message, payload: { ...message.payload, [field]: key } };
         const value = await hostileHandshakeValue(Buffer.from(JSON.stringify(hostile)), message.kind);
@@ -54,8 +60,12 @@ test('checksummed invite and acceptance links reject malformed public spend keys
 });
 
 test('checksummed links reject unknown envelope and payload fields instead of silently dropping them', async (context) => {
-  const acceptance = { kind: 'accept', payload: { offerDigest: await offerDigest(offer), xinAlgoAddress: 'B'.repeat(58),
-    xinPublicSpendKey: '01'.repeat(32), xinPrivateViewKey: '02'.repeat(32) }, signature: unsigned.signature };
+  const acceptance = {
+    kind: 'accept', payload: {
+      offerDigest: await offerDigest(offer), xinAlgoAddress: 'B'.repeat(58),
+      xinPublicSpendKey: '01'.repeat(32), xinPrivateViewKey: '02'.repeat(32)
+    }, signature: unsigned.signature
+  };
   for (const message of [unsigned, acceptance]) {
     for (const [label, hostile] of [
       ['envelope', { ...message, extra: true }],
@@ -78,8 +88,12 @@ test('well-formed links cannot authenticate with a wrong signer or a checksummed
     const publicKey = await wallet.keyGen(root, KeyContext.Address, 0, 0);
     const otherPublicKey = await wallet.keyGen(otherRoot, KeyContext.Address, 0, 0);
     assert.notDeepEqual(publicKey, otherPublicKey);
-    const acceptance = { kind: 'accept', payload: { offerDigest: await offerDigest(offer), xinAlgoAddress: 'B'.repeat(58),
-      xinPublicSpendKey: '01'.repeat(32), xinPrivateViewKey: '02'.repeat(32) } };
+    const acceptance = {
+      kind: 'accept', payload: {
+        offerDigest: await offerDigest(offer), xinAlgoAddress: 'B'.repeat(58),
+        xinPublicSpendKey: '01'.repeat(32), xinPrivateViewKey: '02'.repeat(32)
+      }
+    };
     for (const message of [{ kind: 'invite', payload: offer }, acceptance]) {
       const signature = Buffer.from(await signCanonicalSwapHandshake(root, message)).toString('hex');
       const signed = { ...message, signature };
@@ -160,9 +174,11 @@ test('real XHD data signatures verify only over the exact application-domain byt
     const acceptance = { kind: 'accept', payload: { offerDigest: await offerDigest(offer), xinAlgoAddress: 'B'.repeat(58), xinPublicSpendKey: '01'.repeat(32), xinPrivateViewKey: '02'.repeat(32) }, signature: signed.signature };
     await assert.rejects(verifyHandshake(acceptance, publicKey), /invalid/);
     const acceptanceBytes = handshakeSigningBytes('accept', acceptance.payload);
-    const schema = { type: 'object', additionalProperties: false,
+    const schema = {
+      type: 'object', additionalProperties: false,
       properties: Object.fromEntries(Array.from(acceptanceBytes, (byte, index) => [String(index), { const: byte }])),
-      required: Array.from(acceptanceBytes, (_, index) => String(index)) };
+      required: Array.from(acceptanceBytes, (_, index) => String(index))
+    };
     const acceptanceSignature = await wallet.signData(root, KeyContext.Address, 0, 0, acceptanceBytes, { encoding: Encoding.NONE, schema });
     await verifyHandshake({ ...acceptance, signature: Buffer.from(acceptanceSignature).toString('hex') }, publicKey);
     assert.deepEqual(Buffer.from(await signCanonicalSwapHandshake(root, { kind: 'accept', payload: acceptance.payload })), Buffer.from(acceptanceSignature));
@@ -187,8 +203,10 @@ test('manual handshake signer never invokes Ajv-backed signData and rejects arbi
     const publicKey = await wallet.keyGen(root, KeyContext.Address, 0, 0);
     const signature = await signCanonicalSwapHandshake(root, { kind: 'invite', payload: offer });
     await verifyHandshake({ ...unsigned, signature: Buffer.from(signature).toString('hex') }, publicKey);
-    const acceptance = { offerDigest: await offerDigest(offer), xinAlgoAddress: 'B'.repeat(58),
-      xinPublicSpendKey: '01'.repeat(32), xinPrivateViewKey: '02'.repeat(32) };
+    const acceptance = {
+      offerDigest: await offerDigest(offer), xinAlgoAddress: 'B'.repeat(58),
+      xinPublicSpendKey: '01'.repeat(32), xinPrivateViewKey: '02'.repeat(32)
+    };
     const acceptedSignature = await signCanonicalSwapHandshake(root, { kind: 'accept', payload: acceptance });
     await verifyHandshake({ kind: 'accept', payload: acceptance, signature: Buffer.from(acceptedSignature).toString('hex') }, publicKey);
     for (const input of [null, 'TX', new Uint8Array([84, 88]), { kind: 'TX', payload: offer },

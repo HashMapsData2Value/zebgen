@@ -1,4 +1,4 @@
-import { journalSignedAlgorandTransactions, saveVerifiedLeakSwap, listVerifiedLeakSwaps, validateAgreementSigning } from '../../lib/wallet/swapRecordVault';
+import { journalSignedAlgorandTransactions, saveVerifiedLeakSwap, listVerifiedLeakSwaps, validateAgreementSigning, verifyAgreementApplication } from '../../lib/wallet/swapRecordVault';
 import algosdk from 'algosdk';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
@@ -21,14 +21,22 @@ import { leakySign } from '../../lib/wallet/leakySign';
 import { getMoneroWalletState, loadMoneroCombinedContext, saveMoneroCombinedContext, unlockMoneroWallet } from '../../lib/wallet/moneroVault';
 import { combinePrivateSpendKeys, computeCombinedAddressWithPrivateAndPublic } from '../../lib/wallet/moneroWallet';
 import type { ZebgenSaveLeakSwapParams } from '../../lib/provider/types';
-import { createSwapInvite, acceptSwapInvite, confirmSwapAcceptance, type SwapInviteTerms } from '../../lib/wallet/swapHandshakeVault';
+import { createSwapInvite, acceptSwapInvite, confirmSwapAcceptance, loadAcceptedSwap, resolveSwapWalletId, type SwapInviteTerms } from '../../lib/wallet/swapHandshakeVault';
 import { parseHandshakeLink, verifyHandshake, type SignedOffer } from 'leakswap-utils/dist/swapHandshake.js';
+import SwapFeeDisclosure from './SwapFeeDisclosure';
+import ConnectDisclosure from './ConnectDisclosure';
+import { activeConnectionAccounts, assertConnectionAccounts, connectedAccounts, type ConnectionAccounts } from '../../lib/provider/connectionApproval';
+import { connectionChoices, type ConnectionChoices } from '../../lib/provider/connectionSelection';
+import { resolveLeakSwapDeposit, type LeakSwapDepositTarget } from '../../lib/wallet/leakSwapDeposit';
+import type { ZebgenDepositLeakSwapMoneroParams } from '../../lib/provider/types';
+import LeakSwapDeposit from './LeakSwapDeposit';
+import { recoverLeakSwap, type RecoverLeakSwapParams } from '../../lib/wallet/recoverLeakSwap';
 
 interface ExternalRequestAppProps {
   requestId: string;
 }
 
-type Stage = 'loading' | 'consent' | 'unlock' | 'error';
+type Stage = 'loading' | 'consent' | 'unlock' | 'deposit' | 'error';
 type ApprovalPhase = 'unlocking' | 'validating' | 'monero' | 'signing';
 
 const APPROVAL_PHASE_LABELS: Record<ApprovalPhase, string> = {
@@ -40,6 +48,9 @@ const APPROVAL_PHASE_LABELS: Record<ApprovalPhase, string> = {
 
 function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
   const [pending, setPending] = useState<PendingZebgenRequest | null>(null);
+  const [connectAccounts, setConnectAccounts] = useState<ConnectionAccounts | null>(null);
+  const [choices, setChoices] = useState<ConnectionChoices | null>(null);
+  const [deposit, setDeposit] = useState<{ target: LeakSwapDepositTarget; accounts: ConnectionAccounts } | null>(null);
   const [originApproved, setOriginApproved] = useState(false);
   const [stage, setStage] = useState<Stage>('loading');
   const [secret, setSecret] = useState('');
@@ -89,6 +100,17 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
       }
       setPending(response.request);
       setOriginApproved(Boolean(response.originApproved));
+      if (response.request.type === 'connect') {
+        try {
+          const [accounts, available] = await Promise.all([activeConnectionAccounts(), connectionChoices()]);
+          if (!isMounted) return;
+          setConnectAccounts(accounts);
+          setChoices(available);
+        } catch (failure) {
+          if (!isMounted) return;
+          setError(failure instanceof Error ? failure.message : 'Unable to load active accounts.');
+        }
+      }
       setStage(response.request.type === 'connect' ? 'consent' : 'unlock');
     })();
     return () => {
@@ -97,7 +119,7 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
   }, [requestId]);
 
   async function respond(ok: boolean, result?: unknown, errMessage?: string) {
-    await browser.runtime.sendMessage({
+    const response = await browser.runtime.sendMessage({
       channel: 'zebgen-pending',
       action: 'resolve',
       id: requestId,
@@ -105,6 +127,7 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
       result,
       error: errMessage,
     });
+    if (!response?.ok) throw new Error(response?.error ?? 'Unable to complete request.');
     window.close();
   }
 
@@ -112,12 +135,8 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
     setIsBusy(true);
     setError(null);
     try {
-      const [signedIn, moneroState] = await Promise.all([getSignedInState(), getMoneroWalletState()]);
-      const activeMonero = moneroState.wallets.find((wallet) => wallet.id === moneroState.activeWalletId);
-      await respond(true, {
-        algoAddress: signedIn.algoAddress ?? null,
-        moneroAddress: activeMonero?.address ?? null,
-      });
+      if (!connectAccounts || !choices) throw new Error('Wait for your wallets to load.');
+      await respond(true, connectAccounts);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to connect.');
       setIsBusy(false);
@@ -134,7 +153,18 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
     setApprovalPhase('unlocking');
     setScanProgress(null);
     try {
+      const accounts = await connectedAccounts(pending.origin);
+      await assertConnectionAccounts(pending.origin, pending.params);
       await unlockWallet(secret);
+      if (pending.type === 'depositLeakSwapMonero') {
+        if (!accounts) throw new Error('Connect the active accounts before depositing.');
+        const target = await resolveLeakSwapDeposit(pending.params as ZebgenDepositLeakSwapMoneroParams, secret);
+        await assertConnectionAccounts(pending.origin, pending.params, accounts);
+        setDeposit({ target, accounts });
+        setStage('deposit');
+        setIsBusy(false);
+        return;
+      }
       const controller = new AbortController();
       scanController.current = controller;
       setScanProgress(null);
@@ -145,6 +175,7 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
           setScanProgress(progress);
         },
       }, setApprovalPhase);
+      await assertConnectionAccounts(pending.origin, pending.params, accounts ?? undefined);
       await respond(true, result);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to complete request.');
@@ -207,26 +238,32 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
         ) : null}
 
         {pending.type === 'saveLeakSwap' ? <p>Application {(pending.params as ZebgenSaveLeakSwapParams).appId}</p> : null}
+        {pending.type === 'depositLeakSwapMonero' && stage !== 'deposit' ? <p>Application {(pending.params as ZebgenDepositLeakSwapMoneroParams).appId}</p> : null}
+        {pending.type === 'getMoneroShareInfo' ? <p className="privacy-notice">This separate swap-sharing approval shares your Monero private view key, public spend key, and public address with this site. The private view key can expose incoming transactions. Your mnemonic and private spend key are not shared.</p> : null}
         {pending.type === 'createSwapInvite' || pending.type === 'acceptSwapInvite' ? (
           <div>
-            <p>Authentication only. This does not authorize a transaction or transfer funds.</p>
-            <p className="privacy-notice">The link shares this wallet’s private view key. Use dedicated swap keys to avoid exposing unrelated incoming transactions.</p>
+            <p>Approval creates and stores an encrypted, dedicated LeakSwap key share before signing the link. Accepting the same invite again reuses its saved share. This does not transfer funds or change your normal Monero funding wallet.</p>
+            <p className="privacy-notice">The link shares the swap share's private view key and public spend key with the site and recipient. The view key exposes incoming swap transactions. Your normal wallet's private view key and all private spend keys stay private. Swap shares are not receive or send wallets.</p>
             {(() => {
               const terms = pending.type === 'createSwapInvite' ? pending.params as SwapInviteTerms : reviewOffer?.payload;
               if (!terms) return <p>{reviewError ?? 'Verifying invite...'}</p>;
-              return <dl>
-                <dt>ALGO</dt><dd>{(BigInt(terms.algoAmount) / 1000000n).toString()}.{(BigInt(terms.algoAmount) % 1000000n).toString().padStart(6, '0')}</dd>
-                <dt>XMR</dt><dd>{(BigInt(terms.xmrAmount) / 1000000000000n).toString()}.{(BigInt(terms.xmrAmount) % 1000000000000n).toString().padStart(12, '0')}</dd>
-                <dt>Deposit deadline</dt><dd>{new Date(terms.t0 * 1000).toISOString()}</dd>
-                <dt>Final expiry</dt><dd>{new Date(terms.t1 * 1000).toISOString()}</dd>
-                {reviewOffer ? <><dt>Ali</dt><dd style={{ overflowWrap: 'anywhere' }}>{reviewOffer.payload.aliAlgoAddress}</dd>
-                  <dt>Algorand genesis</dt><dd style={{ overflowWrap: 'anywhere' }}>{reviewOffer.payload.algoGenesisHash}</dd>
-                  <dt>Monero network</dt><dd>{reviewOffer.payload.moneroNetwork}</dd></> : null}
-              </dl>;
+              return <>
+                <SwapFeeDisclosure grossMicroAlgos={BigInt(terms.algoAmount)} />
+                <dl>
+                  <dt>XMR</dt><dd>{(BigInt(terms.xmrAmount) / 1000000000000n).toString()}.{(BigInt(terms.xmrAmount) % 1000000000000n).toString().padStart(12, '0')}</dd>
+                  <dt>Deposit deadline</dt><dd>{new Date(terms.t0 * 1000).toISOString()}</dd>
+                  <dt>Final expiry</dt><dd>{new Date(terms.t1 * 1000).toISOString()}</dd>
+                  {reviewOffer ? <><dt>Ali</dt><dd style={{ overflowWrap: 'anywhere' }}>{reviewOffer.payload.aliAlgoAddress}</dd>
+                    <dt>Algorand genesis</dt><dd style={{ overflowWrap: 'anywhere' }}>{reviewOffer.payload.algoGenesisHash}</dd>
+                    <dt>Monero network</dt><dd>{reviewOffer.payload.moneroNetwork}</dd></> : null}
+                </dl>
+              </>;
             })()}
           </div>
         ) : null}
         {pending.type === 'listLeakSwaps' ? <p className="privacy-notice">Shares saved swap identities and private view keys with this page. Private spend keys are not shared.</p> : null}
+        {pending.type === 'saveLeakSwap' && (pending.params as ZebgenSaveLeakSwapParams).settlementTxId ? <p>Save the confirmed claim or refund outcome for this swap. Zebgen checks the transaction on-chain; no funds will be sent.</p> : null}
+        {pending.type === 'recoverLeakSwapMonero' ? <p>Recover Monero for saved application {(pending.params as RecoverLeakSwapParams).appId} from a confirmed leaky claim or refund. Saves the combined wallet without switching accounts or sending funds. Private spend keys stay in Zebgen.</p> : null}
 
         {pending.type === 'scanCombinedMoneroFunding' ? (
           <p className="hint">
@@ -237,11 +274,18 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
         ) : null}
 
         {stage === 'consent' ? (
+          <ConnectDisclosure accounts={connectAccounts} choices={choices} disabled={isBusy} onChange={setConnectAccounts} />
+        ) : null}
+        {stage === 'deposit' && deposit ? (
+          <LeakSwapDeposit params={pending.params as ZebgenDepositLeakSwapMoneroParams}
+            target={deposit.target} accounts={deposit.accounts} origin={pending.origin} secret={secret}
+            onComplete={result => respond(true, result)} onCancel={onReject} />
+        ) : stage === 'consent' ? (
           <div className="seed-reveal-actions">
             <button type="button" className="secondary" onClick={onReject} disabled={isBusy}>
               Deny
             </button>
-            <button type="button" onClick={onApproveConnect} disabled={isBusy}>
+            <button type="button" onClick={onApproveConnect} disabled={isBusy || !connectAccounts}>
               {isBusy ? 'Connecting...' : 'Allow'}
             </button>
           </div>
@@ -262,7 +306,7 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
                 {isBusy && (pending.type === 'scanCombinedMoneroFunding' || approvalPhase === 'monero') ? 'Cancel scan' : 'Deny'}
               </button>
               <button type="submit" disabled={isBusy || !secret || (pending.type === 'acceptSwapInvite' && !reviewOffer)}>
-                {isBusy ? pending.type === 'signAlgorandTransactions' ? APPROVAL_PHASE_LABELS[approvalPhase] : 'Approving...' : 'Unlock and Approve'}
+                {isBusy ? pending.type === 'signAlgorandTransactions' ? APPROVAL_PHASE_LABELS[approvalPhase] : 'Approving...' : pending.type === 'depositLeakSwapMonero' ? 'Unlock and review deposit' : 'Unlock and Approve'}
               </button>
             </div>
           </form>
@@ -280,7 +324,9 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
 }
 
 async function computeResult(pending: PendingZebgenRequest, secret: string, control?: MoneroFundingControl, onPhase?: (phase: ApprovalPhase) => void): Promise<unknown> {
+  await assertConnectionAccounts(pending.origin, pending.params);
   const networkSettings = await getNetworkSettings();
+  if (pending.type === 'recoverLeakSwapMonero') return recoverLeakSwap(pending.params as RecoverLeakSwapParams, secret);
   if (pending.type === 'createSwapInvite') return createSwapInvite(pending.params as SwapInviteTerms, secret);
   if (pending.type === 'acceptSwapInvite') return acceptSwapInvite((pending.params as { link: string }).link, secret);
   if (pending.type === 'confirmSwapAcceptance') return confirmSwapAcceptance((pending.params as { link: string }).link, secret);
@@ -292,8 +338,9 @@ async function computeResult(pending: PendingZebgenRequest, secret: string, cont
   }
 
   if (pending.type === 'getMoneroShareInfo') {
-    const params = pending.params as { moneroWalletId?: number };
-    const material = await unlockMoneroWallet(secret, networkSettings.monero.networkType, params.moneroWalletId);
+    const params = pending.params as { moneroWalletId?: number; agreementDigest?: string };
+    const walletId = await resolveSwapWalletId(params.agreementDigest, secret, params.moneroWalletId);
+    const material = await unlockMoneroWallet(secret, networkSettings.monero.networkType, walletId);
     if (!material) {
       throw new Error('No Monero wallet found. Create one in the wallet first.');
     }
@@ -306,11 +353,13 @@ async function computeResult(pending: PendingZebgenRequest, secret: string, cont
 
   if (pending.type === 'computeCombinedMoneroAddress') {
     const params = pending.params as {
+      agreementDigest?: string;
       moneroWalletId?: number;
       counterpartyPrivateViewKey: string;
       counterpartyPublicSpendKey: string;
     };
-    const walletId = params.moneroWalletId ?? (await getMoneroWalletState()).activeWalletId;
+    await assertCounterparty(params, secret);
+    const walletId = await resolveSwapWalletId(params.agreementDigest, secret, params.moneroWalletId);
     if (walletId === null) throw new Error('No Monero wallet found. Create one in the wallet first.');
     const material = await unlockMoneroWallet(secret, networkSettings.monero.networkType, walletId);
     if (!material) {
@@ -323,8 +372,10 @@ async function computeResult(pending: PendingZebgenRequest, secret: string, cont
       params.counterpartyPublicSpendKey,
       networkSettings.monero.networkType
     );
-    const saved = await loadMoneroCombinedContext({ walletId, network: networkSettings.monero.network,
-      combinedAddress: combined.combinedAddress }, secret);
+    const saved = await loadMoneroCombinedContext({
+      walletId, network: networkSettings.monero.network,
+      combinedAddress: combined.combinedAddress
+    }, secret);
     const height = saved?.restoreHeight ?? await currentRestoreHeight(networkSettings.monero);
     const legacyHeight = await swapAddressHeight(combined.combinedAddress);
     const restoreHeight = Math.min(height ?? 0, fundingRestoreHeight(undefined, legacyHeight ?? height));
@@ -344,7 +395,8 @@ async function computeResult(pending: PendingZebgenRequest, secret: string, cont
   if (pending.type === 'scanCombinedMoneroFunding') {
     const params = pending.params;
     validateFundingParams(params);
-    const walletId = params.moneroWalletId ?? (await getMoneroWalletState()).activeWalletId;
+    await assertCounterparty(params, secret);
+    const walletId = await resolveSwapWalletId(params.agreementDigest, secret, params.moneroWalletId);
     if (walletId === null) throw new Error('No Monero wallet found. Create one in the wallet first.');
     const material = await unlockMoneroWallet(secret, networkSettings.monero.networkType, walletId);
     if (!material) throw new Error('No Monero wallet found. Create one in the wallet first.');
@@ -355,8 +407,10 @@ async function computeResult(pending: PendingZebgenRequest, secret: string, cont
       params.counterpartyPublicSpendKey,
       networkSettings.monero.networkType
     );
-    const saved = await loadMoneroCombinedContext({ walletId, network: networkSettings.monero.network,
-      combinedAddress: combined.combinedAddress }, secret);
+    const saved = await loadMoneroCombinedContext({
+      walletId, network: networkSettings.monero.network,
+      combinedAddress: combined.combinedAddress
+    }, secret);
     const restoreHeight = fundingRestoreHeight(params.restoreHeight,
       saved?.restoreHeight ?? await swapAddressHeight(combined.combinedAddress));
     const funding = await scanMoneroFunding(
@@ -385,8 +439,14 @@ async function computeResult(pending: PendingZebgenRequest, secret: string, cont
   if (pending.type === 'listLeakSwaps') return listVerifiedLeakSwaps(secret);
 
   if (pending.type === 'computeMoneroLeakySignature') {
-    const params = pending.params as { moneroWalletId?: number; messageHex: string };
-    const material = await unlockMoneroWallet(secret, networkSettings.monero.networkType, params.moneroWalletId);
+    const params = pending.params as { moneroWalletId?: number; messageHex: string; agreementDigest?: string; agreementAppId?: string };
+    const walletId = await resolveSwapWalletId(params.agreementDigest, secret, params.moneroWalletId);
+    if (params.agreementDigest) {
+      if (!params.agreementAppId) throw new Error('Agreement application ID is required.');
+      await verifyAgreementApplication(params.agreementDigest, BigInt(params.agreementAppId), secret);
+      if (params.messageHex.toLowerCase() !== bytesToHex(algosdk.decodeAddress(algosdk.getApplicationAddress(BigInt(params.agreementAppId)).toString()).publicKey)) throw new Error('Leaky signature message does not match the agreement application.');
+    }
+    const material = await unlockMoneroWallet(secret, networkSettings.monero.networkType, walletId);
     if (!material) {
       throw new Error('No Monero wallet found. Create one in the wallet first.');
     }
@@ -395,6 +455,16 @@ async function computeResult(pending: PendingZebgenRequest, secret: string, cont
   }
 
   throw new Error(`Unsupported request type: ${pending.type}`);
+}
+
+async function assertCounterparty(params: { agreementDigest?: string; counterpartyPublicSpendKey: string; counterpartyPrivateViewKey: string }, secret: string) {
+  if (!params.agreementDigest) return;
+  const agreement = await loadAcceptedSwap(params.agreementDigest, secret);
+  const { algoAddress } = await deriveActiveSeedAlgoAddressAtIndex(secret, 0);
+  const ali = agreement.offer.payload.aliAlgoAddress === algoAddress;
+  const publicKey = ali ? agreement.acceptance.payload.xinPublicSpendKey : agreement.offer.payload.aliPublicSpendKey;
+  const viewKey = ali ? agreement.acceptance.payload.xinPrivateViewKey : agreement.offer.payload.aliPrivateViewKey;
+  if (params.counterpartyPublicSpendKey !== publicKey || params.counterpartyPrivateViewKey !== viewKey) throw new Error('Counterparty keys do not match the agreement.');
 }
 
 function summarizeTransactions(params: unknown): string[] {
@@ -438,9 +508,13 @@ function describeRequest(pending: PendingZebgenRequest): string {
     case 'scanCombinedMoneroFunding':
       return 'Check Combined Monero Funding (View Only)';
     case 'saveLeakSwap':
-      return 'Save LeakSwap Recovery Record';
+      return (pending.params as ZebgenSaveLeakSwapParams).settlementTxId ? 'Save Confirmed Swap Settlement' : 'Save LeakSwap Recovery Record';
+    case 'depositLeakSwapMonero':
+      return 'Deposit Monero for Accepted LeakSwap';
     case 'listLeakSwaps':
       return 'Share Saved LeakSwaps';
+    case 'recoverLeakSwapMonero':
+      return 'Claim XMR: Recover Saved Swap Wallet';
     case 'createSwapInvite':
       return 'Authenticate LeakSwap Offer';
     case 'acceptSwapInvite':

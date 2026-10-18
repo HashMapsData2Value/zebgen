@@ -15,23 +15,28 @@ const compiled = ts.transpileModule(readFileSync(new URL('../entrypoints/popup/L
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
 }).outputText;
 
-function render(swaps, now = 9000, { loading = false, error = null } = {}) {
-  const values = [loading, error, swaps, now, 0];
+function render(swaps, now = 9000, { loading = false, error = null, shares = [], onRecover } = {}) {
+  const values = [loading, error, swaps, shares, now, 0];
   const api = {};
-  runInNewContext(compiled, { exports: api, require: name => {
-    if (name === 'react') return { ...react, useState: () => [values.shift(), () => {}], useEffect: () => {} };
-    if (name === 'react/jsx-runtime') return jsx;
-    if (name.endsWith('/swapStatus')) return status;
-    if (name.endsWith('/formatAtomic')) return { formatAtomic };
-    if (name.endsWith('.png')) return { default: `data:image/png;base64,${readFileSync(new URL(`../assets/${name.split('/').at(-1)}`, import.meta.url)).toString('base64')}` };
-    if (name === 'lucide-react') return icons;
-    return {};
-  } });
-  return renderToStaticMarkup(react.createElement(api.default, {}));
+  runInNewContext(compiled, {
+    exports: api, require: name => {
+      if (name === 'react') return { ...react, useState: () => [values.shift(), () => { }], useEffect: () => { } };
+      if (name === 'react/jsx-runtime') return jsx;
+      if (name === './SwapRecoveryTools') return { default: () => null };
+      if (name.endsWith('/swapStatus')) return status;
+      if (name.endsWith('/formatAtomic')) return { formatAtomic };
+      if (name.endsWith('.png')) return { default: `data:image/png;base64,${readFileSync(new URL(`../assets/${name.split('/').at(-1)}`, import.meta.url)).toString('base64')}` };
+      if (name === 'lucide-react') return icons;
+      return {};
+    }
+  });
+  return renderToStaticMarkup(react.createElement(api.default, { onRecover }));
 }
 
-const swap = (appId, role, state, checkedAt = 9000) => ({ appId, role, state, checkedAt,
-  t0: 10000, t1: 17200, genesisHash: 'test-genesis', funding: 'present', escrowAtomic: '5000000', moneroNetwork: 'stagenet', chainTime: 9000 });
+const swap = (appId, role, state, checkedAt = 9000) => ({
+  appId, role, state, checkedAt,
+  t0: 10000, t1: 17200, genesisHash: 'test-genesis', funding: 'present', escrowAtomic: '5000000', moneroNetwork: 'stagenet', chainTime: 9000
+});
 
 test('wallet lists urgent swaps first with one New Swap action and no developer tools', () => {
   const html = render([swap('1', 'ali', 'ready'), swap('2', 'ali', 'awaiting'), swap('3', 'xin', 'unavailable')]);
@@ -77,6 +82,17 @@ test('swap rows show live role-specific claim and punish-refund states', () => {
   assert.match(render([{ ...swap('1', 'ali', 'ready'), chainTime: 9000 }]), /Waiting for Xin to claim/);
   assert.match(render([{ ...swap('1', 'ali', 'ready'), chainTime: 17200 }]), /Punish refund available/);
   assert.match(render([{ ...swap('1', 'xin', 'awaiting'), funding: 'empty' }]), /Waiting for ALGO funding/);
+});
+
+test('dedicated share inventory presents bindings and recovery, not receive or send wallets', () => {
+  const html = render([], 9000, { onRecover: () => {}, shares: [{ walletId: -41,
+    digest: 'ab'.repeat(32), algoAddress: 'A'.repeat(58), genesisHash: 'B'.repeat(43) + '=',
+    network: 'regtest', createdAt: '2026-10-17T00:00:00.000Z' }] });
+  assert.match(html, /LeakSwap key shares \(1\)/);
+  assert.match(html, /Offer digest/);
+  assert.match(html, /Algorand identity/);
+  assert.match(html, /Recover combined wallet/);
+  assert.doesNotMatch(html, /Receive|Send XMR|Private view key|Private spend key|QRCode/);
 });
 
 test('swap list fits mobile and desktop with actual brand assets', async () => {
