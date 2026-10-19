@@ -96,7 +96,7 @@ export const MONERO_PRESETS: Record<MoneroNetworkId, MoneroNetworkConfig> = {
   mainnet: {
     network: 'mainnet',
     networkType: MoneroNetworkType.MAINNET,
-    daemon: { uri: 'http://127.0.0.1:18081' },
+    daemon: { uri: 'https://xmr.nodely.dev:18089' },
   },
   testnet: {
     network: 'testnet',
@@ -106,7 +106,7 @@ export const MONERO_PRESETS: Record<MoneroNetworkId, MoneroNetworkConfig> = {
   stagenet: {
     network: 'stagenet',
     networkType: MoneroNetworkType.STAGENET,
-    daemon: { uri: 'http://127.0.0.1:38081' },
+    daemon: { uri: 'https://xmr.nodely.dev:38089' },
   },
 };
 
