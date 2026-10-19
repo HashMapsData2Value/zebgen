@@ -1,4 +1,24 @@
 const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+const browserDownloads = [...document.querySelectorAll('[data-browser-download]')];
+for (const link of browserDownloads) {
+  link.addEventListener('click', () => selectTab(document.getElementById(`tab-${link.dataset.browserDownload}`)));
+}
+async function resolveBrowserDownloads() {
+  try {
+    const response = await fetch('https://api.github.com/repos/HashMapsData2Value/zebgen/releases/latest', { signal: AbortSignal.timeout(8000) });
+    if (!response.ok) throw new Error(`Release lookup failed: ${response.status}`);
+    const release = await response.json();
+    for (const link of browserDownloads) {
+      const asset = release.assets?.find(asset => asset.name.endsWith(`-${link.dataset.browserDownload}.zip`));
+      if (!asset) continue;
+      const url = new URL(asset.browser_download_url);
+      if (url.origin === 'https://github.com' && url.pathname.startsWith('/HashMapsData2Value/zebgen/releases/download/')) link.href = url.href;
+    }
+  } catch (error) {
+    console.error('Browser downloads could not be resolved; using release page', error);
+  }
+}
+if (browserDownloads.length) void resolveBrowserDownloads();
 
 const chainScene = document.querySelector('.chain-strip-inner');
 if (chainScene) {

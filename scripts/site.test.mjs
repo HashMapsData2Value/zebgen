@@ -24,6 +24,7 @@ test('website builds from source and brand assets without installed packages', a
       'assets/brand/zebgen-mark-violet-128.png', 'assets/brand/zebgen-mark-luminous.svg',
       'assets/brand/zebgen-mark-violet.svg', 'assets/brand/zebgen-mark-violet-32.png',
       'site/assets/wallet-preview.png',
+      'site/assets/chrome.svg', 'site/assets/firefox.svg',
     ]) {
       await cp(new URL(file, root), path.join(directory, file));
     }

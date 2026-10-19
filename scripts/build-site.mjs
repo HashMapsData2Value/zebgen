@@ -15,6 +15,8 @@ for (const [source, destination] of [
   ['assets/algorand_logo.png', 'algorand.png'],
   ['assets/monero_logo.png', 'monero.png'],
   ['site/assets/wallet-preview.png', 'wallet-preview.png'],
+  ['site/assets/chrome.svg', 'chrome.svg'],
+  ['site/assets/firefox.svg', 'firefox.svg'],
 ]) {
   await cp(new URL(source, root), new URL(`assets/${destination}`, output));
 }
