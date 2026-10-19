@@ -11,6 +11,7 @@ import { readSwapChainStatus, type SavedSwapStatus } from '../../lib/wallet/swap
 import { swapStatus } from '../../lib/wallet/swapStatus';
 import { listSwapShares } from '../../lib/wallet/swapShareVault';
 import SwapRecoveryTools from './SwapRecoveryTools';
+import SwapBackupTools from './SwapBackupTools';
 
 interface LeakSwapPanelProps {
   lockSecret?: string | null;
@@ -110,6 +111,7 @@ export default function LeakSwapPanel({ lockSecret, onRecover }: LeakSwapPanelPr
       {history.map(swapRow)}
     </details> : null}
     <SwapRecoveryTools lockSecret={lockSecret} />
+    {lockSecret ? <SwapBackupTools onRestore={() => setRefresh(value => value + 1)} /> : null}
     <details className="swap-archive" aria-label="LeakSwap key shares">
       <summary>LeakSwap key shares ({shares.length})</summary>
       {shares.map(share => <article className="swap-list-item" key={share.walletId}>

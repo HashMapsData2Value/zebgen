@@ -12,6 +12,7 @@ import * as handshake from 'leakswap-utils/dist/swapHandshake.js';
 import * as agreement from 'leakswap-utils/dist/swapAgreement.js';
 import * as contexts from '../lib/wallet/combinedAddressContext.ts';
 import * as timingPolicy from '../lib/wallet/swapTimingPolicy.ts';
+import { exportSwapBackup, restoreSwapBackup } from '../lib/wallet/swapBackup.ts';
 
 const require = createRequire(import.meta.url);
 const secret = 'test-only-password';
@@ -39,6 +40,7 @@ function harness() {
   let network = 'regtest';
   let genesis = new Uint8Array(32).fill(9);
   const funding = monero.generateMoneroKeyMaterial();
+  let currentSecret = secret;
   const encryptedFunding = seedVault.encryptSeed(new Uint8Array(Buffer.from(funding.privateSpendKey, 'hex')), secret);
   const storage = {
     get: async key => structuredClone(key === null ? data : { [key]: data[key] }),
@@ -74,7 +76,8 @@ function harness() {
       getAllMoneroKeyRecords: async () => [{ id: 1, address: funding.address, createdAt: '2026-01-01' }],
       getMoneroKeyRecord: async id => {
         assert.equal(id, 1, 'shares must not use the normal wallet table');
-        const encrypted = await encryptedFunding;
+        const encrypted = currentSecret === secret ? await encryptedFunding
+          : await seedVault.encryptSeed(new Uint8Array(Buffer.from(funding.privateSpendKey, 'hex')), currentSecret);
         return { encryptedPrivateSpendKey: encrypted.encryptedSeed, salt: encrypted.salt, iv: encrypted.iv };
       },
     },
@@ -103,6 +106,7 @@ function harness() {
     network: value => { network = value; },
     genesis: value => { genesis = value; },
     failWrites: value => { failWrites = value; },
+    password: value => { currentSecret = value; },
   };
 }
 
@@ -153,6 +157,30 @@ test('approved invite persists encrypted fresh shares without changing normal wa
   assert.equal(material.publicSpendKey, first.offer.payload.aliPublicSpendKey);
   assert.ok(!JSON.stringify(vault.data).includes(material.privateSpendKey));
   assert.equal(vault.metaWrites, 0);
+});
+
+test('portable backup restores an actual accepted agreement and exact random share in a fresh store', async () => {
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { locks: { request: async (_name, action) => action() } } });
+  const vault = harness();
+  const invite = await vault.api.createSwapInvite(terms(), secret);
+  vault.select(1);
+  const accepted = await vault.api.acceptSwapInvite(invite.link, secret);
+  vault.select(0);
+  await vault.api.confirmSwapAcceptance(accepted.link, secret);
+  const id = await vault.api.resolveSwapWalletId(invite.offerDigest, secret);
+  const original = await vault.wallets.unlockMoneroWallet(secret, 0, id);
+  const text = await exportSwapBackup(vault.storage, secret, 'external-backup-password');
+  const fresh = {};
+  await restoreSwapBackup({ get: async () => fresh, set: async items => Object.assign(fresh, items) }, text, 'external-backup-password', 'new-wallet-password');
+  for (const key of Object.keys(vault.data)) delete vault.data[key];
+  Object.assign(vault.data, fresh);
+  vault.password('new-wallet-password');
+  vault.reload();
+  assert.equal(await vault.api.resolveSwapWalletId(invite.offerDigest, 'new-wallet-password'), id);
+  const restored = await vault.wallets.unlockMoneroWallet('new-wallet-password', 0, id);
+  assert.equal(restored.privateSpendKey, original.privateSpendKey);
+  assert.equal(restored.publicSpendKey, invite.offer.payload.aliPublicSpendKey);
+  assert.equal((await vault.api.loadAcceptedSwap(invite.offerDigest, 'new-wallet-password')).acceptance.signature, accepted.acceptance.signature);
 });
 
 test('accept retries and concurrent accepts reuse the persisted share, then confirm and reload resolve exact shares', async () => {
