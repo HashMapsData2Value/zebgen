@@ -1,3 +1,10 @@
+## [1.7.1](https://github.com/HashMapsData2Value/zebgen/compare/v1.7.0...v1.7.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* **network:** use Nodely defaults for Monero mainnet and stagenet ([208ca57](https://github.com/HashMapsData2Value/zebgen/commit/208ca5715a34be5d2f6baa360549fa96cc0dd4a5))
+
 # [1.7.0](https://github.com/HashMapsData2Value/zebgen/compare/v1.6.0...v1.7.0) (2026-10-19)
 
 
