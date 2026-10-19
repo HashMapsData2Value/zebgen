@@ -1,12 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
-import { probeMoneroDaemonViaBackground, scanMoneroBalanceViaBackground } from '../../lib/network/messages';
+import {
+  probeMoneroDaemonViaBackground,
+  scanMoneroBalanceViaBackground,
+  isMoneroScanActive,
+} from '../../lib/network/messages';
 import { ensureHostPermissions } from '../../lib/network/hostPermissions';
 import type { MoneroNetworkConfig } from '../../lib/network/networks';
 import { formatAtomic } from '../../lib/wallet/formatAtomic';
 import ScanActivity from './ScanActivity';
 import MoneroChainHeight from './MoneroChainHeight';
-import { balanceCheckpointKey, loadBalanceCheckpoint, saveBalanceCheckpoint } from '../../lib/wallet/moneroBalanceCache';
+import { sanitizeBlockHeight } from '../../lib/monero/scanHeight';
+import { balanceCheckpointKey, loadBalanceCheckpoint } from '../../lib/wallet/moneroBalanceCache';
 
 interface MoneroBalanceProps {
   config: MoneroNetworkConfig;
@@ -33,37 +38,59 @@ export default function MoneroBalance(props: MoneroBalanceProps) {
   const scanning = useRef(false);
   const lastHeight = useRef<number | undefined>(undefined);
   const pollGeneration = useRef(0);
-  const checkpointKey = balanceCheckpointKey(props.config.network, props.config.daemon.uri, props.address, Number(height));
+  const checkpointKey = balanceCheckpointKey(
+    props.config.network,
+    props.config.daemon.uri,
+    props.address,
+    Number(height),
+  );
   useEffect(() => {
     let active = true;
     setBalance(null);
     setScannedAt(null);
     setRefreshNeeded(null);
     lastHeight.current = undefined;
-    void loadBalanceCheckpoint(checkpointKey, props.lockSecret).then(async checkpoint => {
-      if (!active) return;
-      if (checkpoint) {
-        setBalance(checkpoint.balanceAtomic);
-        setScannedAt(new Date(checkpoint.scannedAt).toLocaleString());
-        lastHeight.current = checkpoint.scannedHeight;
-      }
-      const tip = await probeMoneroDaemonViaBackground(props.config);
-      if (!active) return;
-      if (!tip.ok || tip.height === undefined) throw new Error(tip.error ?? 'Unable to check daemon height. Showing saved balance.');
-      if (!checkpoint || tip.height !== checkpoint.scannedHeight) {
-        if (tip.height - Number(height) > 5000) setRefreshNeeded('New scan required. This wallet needs a full-history rescan; refresh explicitly to allow the download.');
-        else await scan(false);
-      }
-    }).catch(failure => {
-      console.error('Unable to restore Monero balance', failure);
-      if (active) setError(failure instanceof Error ? failure.message : String(failure));
-    });
-    return () => { active = false; scanController.current?.abort(); };
+    void loadBalanceCheckpoint(checkpointKey, props.lockSecret)
+      .then(async (checkpoint) => {
+        if (!active) return;
+        if (checkpoint) {
+          setBalance(checkpoint.balanceAtomic);
+          setScannedAt(new Date(checkpoint.scannedAt).toLocaleString());
+          lastHeight.current = checkpoint.scannedHeight;
+        }
+        if (await isMoneroScanActive(checkpointKey)) {
+          if (active) await scan(false);
+          return;
+        }
+        const tip = await probeMoneroDaemonViaBackground(props.config);
+        if (!active) return;
+        if (!tip.ok || tip.height === undefined)
+          throw new Error(tip.error ?? 'Unable to check daemon height. Showing saved balance.');
+        if (!checkpoint || tip.height !== checkpoint.scannedHeight) {
+          if (
+            tip.height - (checkpoint?.resumable ? checkpoint.scannedHeight : Number(height)) >
+            5000
+          )
+            setRefreshNeeded('Scan required. Refresh to allow the history download.');
+          else await scan(false);
+        }
+      })
+      .catch((failure) => {
+        console.error('Unable to restore Monero balance', failure);
+        if (active) setError(failure instanceof Error ? failure.message : String(failure));
+      });
+    return () => {
+      active = false;
+      scanController.current?.abort('detach');
+    };
   }, [checkpointKey, props.lockSecret]);
 
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; scanController.current?.abort(); };
+    return () => {
+      mounted.current = false;
+      scanController.current?.abort('detach');
+    };
   }, []);
 
   useEffect(() => {
@@ -75,20 +102,34 @@ export default function MoneroBalance(props: MoneroBalanceProps) {
       checking = true;
       try {
         const result = await probeMoneroDaemonViaBackground(props.config);
-        if (!result.ok || result.height === undefined) throw new Error(result.error ?? 'Unable to check daemon height.');
+        if (!result.ok || result.height === undefined)
+          throw new Error(result.error ?? 'Unable to check daemon height.');
         if (generation !== pollGeneration.current) return;
         if (lastHeight.current !== result.height) {
-          if (result.height - Number(height) > 5000) {
-            setRefreshNeeded('New blocks available. Refresh to rescan this wallet history; the saved balance may be stale.');
+          const checkpoint = await loadBalanceCheckpoint(checkpointKey, props.lockSecret);
+          if (generation !== pollGeneration.current) return;
+          if (
+            result.height - (checkpoint?.resumable ? checkpoint.scannedHeight : Number(height)) >
+            5000
+          ) {
+            setRefreshNeeded(
+              'New blocks available. Refresh to download the missing history; the saved balance may be stale.',
+            );
           } else if (await scan(false)) lastHeight.current = result.height;
         }
       } catch (failure) {
         console.error('Monero balance polling failed', failure);
-        if (mounted.current && generation === pollGeneration.current) setError(failure instanceof Error ? failure.message : String(failure));
-      } finally { checking = false; }
+        if (mounted.current && generation === pollGeneration.current)
+          setError(failure instanceof Error ? failure.message : String(failure));
+      } finally {
+        checking = false;
+      }
     }
     const timer = window.setInterval(poll, 5000);
-    return () => { pollGeneration.current += 1; window.clearInterval(timer); };
+    return () => {
+      pollGeneration.current += 1;
+      window.clearInterval(timer);
+    };
   }, [balance, height]);
 
   async function scan(requestPermissions = true) {
@@ -107,33 +148,46 @@ export default function MoneroBalance(props: MoneroBalanceProps) {
       if (requestPermissions) await ensureHostPermissions([props.config.daemon.uri]);
       controller.signal.throwIfAborted();
       const restoreHeight = Number(height);
-      if (!/^\d+$/.test(height) || !Number.isSafeInteger(restoreHeight)) throw new Error('Enter a non-negative restore height.');
+      if (!/^\d+$/.test(height) || !Number.isSafeInteger(restoreHeight))
+        throw new Error('Enter a non-negative restore height.');
       const tip = await probeMoneroDaemonViaBackground(props.config);
       controller.signal.throwIfAborted();
-      if (!tip.ok || tip.height === undefined) throw new Error(tip.error ?? 'Unable to check daemon height.');
+      if (!tip.ok || tip.height === undefined)
+        throw new Error(tip.error ?? 'Unable to check daemon height.');
       if (mounted.current) setTargetHeight(tip.height);
-      const result = await scanMoneroBalanceViaBackground({
-        config: props.config,
-        primaryAddress: props.address, walletId: props.walletId, lockSecret: props.lockSecret, restoreHeight
-      }, {
-        signal: controller.signal,
-        onProgress: progress => {
-          if (mounted.current && scanController.current === controller && !controller.signal.aborted) {
-            setScannedHeight(progress.scannedHeight);
-            setTargetHeight(progress.targetHeight);
-          }
+      const result = await scanMoneroBalanceViaBackground(
+        {
+          config: props.config,
+          primaryAddress: props.address,
+          walletId: props.walletId,
+          lockSecret: props.lockSecret,
+          restoreHeight,
         },
-      });
+        {
+          signal: controller.signal,
+          onProgress: (progress) => {
+            if (
+              mounted.current &&
+              scanController.current === controller &&
+              !controller.signal.aborted
+            ) {
+              setScannedHeight(progress.scannedHeight);
+              setTargetHeight(progress.targetHeight);
+            }
+          },
+        },
+      );
       controller.signal.throwIfAborted();
-      if (!result.ok || result.balanceAtomic === undefined) throw new Error(result.error ?? 'Unable to scan balance.');
+      if (!result.ok || result.balanceAtomic === undefined)
+        throw new Error(result.error ?? 'Unable to scan balance.');
       const scannedAt = Date.now();
-      await saveBalanceCheckpoint(checkpointKey, { balanceAtomic: result.balanceAtomic, scannedHeight: tip.height, scannedAt }, props.lockSecret);
+      const checkpoint = await loadBalanceCheckpoint(checkpointKey, props.lockSecret);
       controller.signal.throwIfAborted();
       if (mounted.current) {
         setBalance(result.balanceAtomic);
         setScannedAt(new Date(scannedAt).toLocaleString());
       }
-      lastHeight.current = tip.height;
+      lastHeight.current = checkpoint?.scannedHeight ?? tip.height;
       return true;
     } catch (failure) {
       if (controller.signal.aborted) return false;
@@ -161,25 +215,81 @@ export default function MoneroBalance(props: MoneroBalanceProps) {
   return (
     <div className="monero-balance" aria-busy={busy}>
       <div className="balance-row">
-        <span className="balance-amount">{balance === null ? busy ? 'Checking balance...' : 'Balance not checked' : `${formatAtomic(balance, 12)} XMR`}</span>
-        {!scanSettingsOpen ? <button type="button" className="refresh-btn" title="Scan unlocked balance" aria-label="Scan unlocked balance" onClick={() => void scan()} disabled={busy}>
-          <RefreshCw size={16} className={busy ? 'is-spinning' : ''} />
-        </button> : null}
+        <span className="balance-amount">
+          {balance === null
+            ? busy
+              ? 'Checking balance...'
+              : 'Balance not checked'
+            : `${formatAtomic(balance, 12)} XMR`}
+        </span>
+        {!scanSettingsOpen ? (
+          <button
+            type="button"
+            className="refresh-btn"
+            title="Scan unlocked balance"
+            aria-label="Scan unlocked balance"
+            onClick={() => void scan()}
+            disabled={busy}
+          >
+            <RefreshCw size={16} className={busy ? 'is-spinning' : ''} />
+          </button>
+        ) : null}
       </div>
-      {busy ? <ScanActivity restoreHeight={Number(height)} targetHeight={targetHeight} scannedHeight={scannedHeight} onStop={stopScan} />
-        : <p className="hint" role="status">{stopped ? 'Scan stopped' : balance === null ? 'Unlocked balance not checked' : `Last verified unlocked balance · block ${lastHeight.current ?? 'unknown'} · ${scannedAt}`}</p>}
-      <details className="address-details" onToggle={event => setScanSettingsOpen(event.currentTarget.open)}><summary>Scan settings</summary>
+      {busy ? (
+        <ScanActivity
+          restoreHeight={Number(height)}
+          targetHeight={targetHeight}
+          scannedHeight={scannedHeight}
+          onStop={stopScan}
+        />
+      ) : (
+        <p className="hint" role="status">
+          {stopped
+            ? 'Scan stopped'
+            : balance === null
+              ? 'Unlocked balance not checked'
+              : `Last verified unlocked balance · block ${lastHeight.current ?? 'unknown'} · ${scannedAt}`}
+        </p>
+      )}
+      <details
+        className="address-details"
+        onToggle={(event) => setScanSettingsOpen(event.currentTarget.open)}
+      >
+        <summary>Scan settings</summary>
         <div className="import-form">
           <label htmlFor="balance-restore-height">Restore height</label>
-          <input id="balance-restore-height" inputMode="numeric" value={height} disabled={busy}
-            onChange={(event) => { setHeight(event.target.value); setBalance(null); setScannedAt(null); }} />
+          <input
+            id="balance-restore-height"
+            inputMode="numeric"
+            value={height}
+            disabled={busy}
+            onChange={(event) => {
+              setHeight(sanitizeBlockHeight(event.target.value));
+              setBalance(null);
+              setScannedAt(null);
+            }}
+          />
           <MoneroChainHeight config={props.config} />
-          <button type="button" disabled={busy} onClick={() => void scan()}>{busy ? 'Scanning...' : 'Scan from this height'}</button>
+          <button type="button" disabled={busy} onClick={() => void scan()}>
+            {busy ? 'Scanning...' : 'Scan from this height'}
+          </button>
         </div>
       </details>
-      {Number(height) === 0 ? <p className="privacy-notice">A scan from block 0 downloads the full chain history and may use substantial data.</p> : null}
-      {refreshNeeded ? <p className="hint" role="status">{refreshNeeded}</p> : null}
-      {error ? <p className="error" role="alert">{error}</p> : null}
+      {Number(height) === 0 ? (
+        <p className="privacy-notice">
+          A scan from block 0 downloads the full chain history and may use substantial data.
+        </p>
+      ) : null}
+      {refreshNeeded ? (
+        <p className="hint" role="status">
+          {refreshNeeded}
+        </p>
+      ) : null}
+      {error ? (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }

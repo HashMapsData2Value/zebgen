@@ -32,7 +32,7 @@
     "qrcode.react": "^4.2.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "zebgen-monero-wasm": "0.4.0"
+    "zebgen-monero-wasm": "0.5.0"
   },
   "devDependencies": {
     "@semantic-release/changelog": "^6.0.3",

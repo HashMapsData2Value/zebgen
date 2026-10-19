@@ -11,6 +11,8 @@ node_modules
 **/node_modules
 **/node_modules/
 .output
+.output-scan-fallback/
+.output-scan-validation/
 site-dist/
 stats.html
 stats-*.json

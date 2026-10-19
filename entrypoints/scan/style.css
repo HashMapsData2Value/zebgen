@@ -1,0 +1,23 @@
+:root {
+  font-family: 'Avenir Next', sans-serif;
+  color: #202727;
+  background: #f5f7f6;
+}
+main {
+  max-width: 42rem;
+  margin: 4rem auto;
+  padding: 2rem;
+  border-top: 3px solid #1d776b;
+}
+h1 {
+  font-size: 1.5rem;
+  letter-spacing: 0;
+}
+button {
+  font: inherit;
+  border: 1px solid #b9c8c4;
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  background: white;
+  cursor: pointer;
+}

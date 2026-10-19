@@ -25,6 +25,8 @@ export interface MoneroKeyRecord {
   createdAt: string;
   // First block that can hold this wallet's funds; absent for imported wallets.
   restoreHeight?: number;
+  restoreNetwork?: string;
+  scanRestoreHeights?: Record<string, number>;
 }
 
 export interface WalletMeta {
@@ -77,7 +79,11 @@ export async function getAllSeedRecords(): Promise<SeedRecord[]> {
   return (await dbPromise).getAll('seeds');
 }
 
-export async function saveDerivedAlgoAddress(seedId: number, index: number, address: string): Promise<void> {
+export async function saveDerivedAlgoAddress(
+  seedId: number,
+  index: number,
+  address: string,
+): Promise<void> {
   const transaction = (await dbPromise).transaction('seeds', 'readwrite');
   const record = await transaction.store.get(seedId);
   if (!record) throw new Error('Algorand wallet not found.');
@@ -96,6 +102,29 @@ export async function getMoneroKeyRecord(keyId: number): Promise<MoneroKeyRecord
 
 export async function getAllMoneroKeyRecords(): Promise<MoneroKeyRecord[]> {
   return (await dbPromise).getAll('moneroKeys');
+}
+
+export async function setMoneroScanRestoreHeight(
+  walletId: number,
+  network: string,
+  height: number,
+): Promise<void> {
+  if (
+    !['mainnet', 'stagenet', 'testnet', 'regtest'].includes(network) ||
+    !Number.isSafeInteger(height) ||
+    height < 0 ||
+    height > 0xffffffff
+  ) {
+    throw new Error('Invalid network-specific restore height.');
+  }
+  const transaction = (await dbPromise).transaction('moneroKeys', 'readwrite');
+  const record = await transaction.store.get(walletId);
+  if (!record) throw new Error('Monero wallet not found.');
+  await transaction.store.put({
+    ...record,
+    scanRestoreHeights: { ...record.scanRestoreHeights, [network]: height },
+  });
+  await transaction.done;
 }
 
 export async function getWalletMeta(): Promise<WalletMeta | undefined> {

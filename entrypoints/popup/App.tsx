@@ -3,7 +3,16 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import * as bip39 from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { browser } from 'wxt/browser';
-import { ArrowLeft, ArrowDownLeft, ArrowUpRight, ArrowLeftRight, LockKeyhole, Maximize2, Plus, Settings } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowDownLeft,
+  ArrowUpRight,
+  ArrowLeftRight,
+  LockKeyhole,
+  Maximize2,
+  Plus,
+  Settings,
+} from 'lucide-react';
 
 import algorandLogo from '../../assets/algorand_logo.png';
 import moneroLogo from '../../assets/monero_logo.png';
@@ -47,6 +56,7 @@ import {
 } from '../../lib/network/networks';
 import { getNetworkSettings, saveNetworkSettings } from '../../lib/network/networkStore';
 import { currentRestoreHeight } from '../../lib/monero/restoreHeight';
+import { sanitizeBlockHeight, walletRestoreHeight } from '../../lib/monero/scanHeight';
 import { recoverCombinedWallet } from '../../lib/wallet/combinedRecovery';
 import type { CombinedAddressContext } from '../../lib/wallet/combinedAddressContext';
 import AlgorandAddressCard from './AlgorandAddressCard';
@@ -71,7 +81,7 @@ interface AppProps {
 
 function App({ variant = 'popup' }: AppProps) {
   const [selectedWalletType, setSelectedWalletType] = useState<'algorand' | 'monero' | 'leakswap'>(
-    'algorand'
+    'algorand',
   );
   const [isLoading, setIsLoading] = useState(true);
   const [isLockConfigured, setIsLockConfigured] = useState(false);
@@ -92,13 +102,20 @@ function App({ variant = 'popup' }: AppProps) {
   const [isSettingLock, setIsSettingLock] = useState(false);
   const [isUnlocking, setIsUnlocking] = useState(false);
   const [isDerivingAddress, setIsDerivingAddress] = useState(false);
-  const [algorandView, setAlgorandView] = useState<'wallet' | 'add' | 'transaction' | 'receive' | 'settings'>('wallet');
+  const [algorandView, setAlgorandView] = useState<
+    'wallet' | 'add' | 'transaction' | 'receive' | 'settings'
+  >('wallet');
   const [moneroWallets, setMoneroWallets] = useState<MoneroWalletSummary[]>([]);
   const [activeMoneroWalletId, setActiveMoneroWalletId] = useState<number | null>(null);
   const [moneroMaterial, setMoneroMaterial] = useState<MoneroKeyMaterial | null>(null);
   const [moneroSetupMode, setMoneroSetupMode] = useState<'generate' | 'import' | null>(null);
-  const [moneroView, setMoneroView] = useState<'wallet' | 'add' | 'combine' | 'recover' | 'settings' | 'transaction' | 'receive'>('wallet');
+  const [moneroView, setMoneroView] = useState<
+    'wallet' | 'add' | 'combine' | 'recover' | 'settings' | 'transaction' | 'receive'
+  >('wallet');
   const [importedPrivateSpendKey, setImportedPrivateSpendKey] = useState('');
+  const [moneroHistory, setMoneroHistory] = useState<'unused' | 'used'>('used');
+  const [moneroScanStart, setMoneroScanStart] = useState<'full' | 'height'>('full');
+  const [importRestoreHeight, setImportRestoreHeight] = useState('0');
   const [counterpartyPrivateSpendKey, setCounterpartyPrivateSpendKey] = useState('');
   const [recoveredMaterial, setRecoveredMaterial] = useState<MoneroKeyMaterial | null>(null);
   const [recoveryContexts, setRecoveryContexts] = useState<CombinedAddressContext[]>([]);
@@ -113,7 +130,9 @@ function App({ variant = 'popup' }: AppProps) {
   const [combinedAddressFromPriv, setCombinedAddressFromPriv] = useState('');
   const [combinedAddressFromPublic, setCombinedAddressFromPublic] = useState('');
   const [networkSettings, setNetworkSettings] = useState<NetworkSettings | null>(null);
-  const [algoWallets, setAlgoWallets] = useState<Awaited<ReturnType<typeof listAlgoWallets>>['wallets']>([]);
+  const [algoWallets, setAlgoWallets] = useState<
+    Awaited<ReturnType<typeof listAlgoWallets>>['wallets']
+  >([]);
   const [activeAlgoSeedId, setActiveAlgoSeedId] = useState<number | null>(null);
   const [algoBalances, setAlgoBalances] = useState<Record<string, string>>({});
 
@@ -121,42 +140,62 @@ function App({ variant = 'popup' }: AppProps) {
     const inventory = await listAlgoWallets();
     setAlgoWallets(inventory.wallets);
     setActiveAlgoSeedId(inventory.activeSeedId);
-    const wallet = inventory.wallets.find(item => item.id === inventory.activeSeedId);
+    const wallet = inventory.wallets.find((item) => item.id === inventory.activeSeedId);
     setLastAddressIndex(wallet ? Math.max(...Object.keys(wallet.addresses).map(Number)) : 0);
   }
 
   useEffect(() => {
-    void refreshAlgoInventory().catch(failure => console.error('Unable to load Algorand wallets', failure));
+    void refreshAlgoInventory().catch((failure) =>
+      console.error('Unable to load Algorand wallets', failure),
+    );
   }, []);
 
   useEffect(() => {
     if (!isUnlocked || !networkSettings || selectedWalletType !== 'algorand') return;
     let active = true;
-    const wallet = algoWallets.find(item => item.id === activeAlgoSeedId);
+    const wallet = algoWallets.find((item) => item.id === activeAlgoSeedId);
     setAlgoBalances({});
     async function refresh() {
       for (const address of Object.values(wallet?.addresses ?? {})) {
         if (!active) return;
-        const result = await getAlgoBalance(networkSettings!.algorand.algod, address, networkSettings!.algorand.network);
-        if (active) setAlgoBalances(values => ({ ...values, [address]: result.ok && result.algos !== undefined
-          ? `${result.algos.toLocaleString(undefined, { maximumFractionDigits: 6 })} ALGO` : 'Unavailable' }));
+        const result = await getAlgoBalance(
+          networkSettings!.algorand.algod,
+          address,
+          networkSettings!.algorand.network,
+        );
+        if (active)
+          setAlgoBalances((values) => ({
+            ...values,
+            [address]:
+              result.ok && result.algos !== undefined
+                ? `${result.algos.toLocaleString(undefined, { maximumFractionDigits: 6 })} ALGO`
+                : 'Unavailable',
+          }));
       }
     }
-    void refresh().catch(failure => console.error('Unable to load account balances', failure));
-    return () => { active = false; };
+    void refresh().catch((failure) => console.error('Unable to load account balances', failure));
+    return () => {
+      active = false;
+    };
   }, [activeAlgoSeedId, algoWallets, isUnlocked, networkSettings, selectedWalletType]);
 
   useEffect(() => {
     let active = true;
     const refresh = () => {
-      getMoneroWalletState().then(state => {
-        if (active) setMoneroWallets(state.wallets);
-      }).catch(error => console.error('Unable to refresh Monero wallet inventory', error));
+      getMoneroWalletState()
+        .then((state) => {
+          if (active) setMoneroWallets(state.wallets);
+        })
+        .catch((error) => console.error('Unable to refresh Monero wallet inventory', error));
     };
-    const onVisibility = () => { if (document.visibilityState === 'visible') refresh(); };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', onVisibility);
-    const inventoryTimer = window.setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 5000);
+    const inventoryTimer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') refresh();
+    }, 5000);
     return () => {
       active = false;
       window.clearInterval(inventoryTimer);
@@ -233,7 +272,11 @@ function App({ variant = 'popup' }: AppProps) {
       return;
     }
     setIsLoadingRecovery(true);
-    listMoneroCombinedContexts(activeMoneroWalletId, networkSettings.monero.network, sessionLockSecret)
+    listMoneroCombinedContexts(
+      activeMoneroWalletId,
+      networkSettings.monero.network,
+      sessionLockSecret,
+    )
       .then((contexts) => {
         if (!isMounted) return;
         setRecoveryContexts(contexts);
@@ -243,8 +286,12 @@ function App({ variant = 'popup' }: AppProps) {
         console.error('Unable to load recovery contexts', err);
         if (isMounted) setError(err instanceof Error ? err.message : 'Unable to load saved swaps.');
       })
-      .finally(() => { if (isMounted) setIsLoadingRecovery(false); });
-    return () => { isMounted = false; };
+      .finally(() => {
+        if (isMounted) setIsLoadingRecovery(false);
+      });
+    return () => {
+      isMounted = false;
+    };
   }, [moneroView, activeMoneroWalletId, networkSettings, sessionLockSecret]);
 
   async function switchAlgorandNetwork(network: AlgorandNetworkId) {
@@ -270,8 +317,8 @@ function App({ variant = 'popup' }: AppProps) {
       setMoneroMaterial(
         getMoneroKeyMaterialFromPrivateSpendKey(
           moneroMaterial.privateSpendKey,
-          next.monero.networkType
-        )
+          next.monero.networkType,
+        ),
       );
     }
   }
@@ -301,12 +348,12 @@ function App({ variant = 'popup' }: AppProps) {
   }, [normalizedMnemonic]);
 
   const generatedMoneroMnemonic = useMemo(
-    () => moneroMaterial ? privateKeyToMoneroMnemonic(moneroMaterial.privateSpendKey) : '',
-    [moneroMaterial]
+    () => (moneroMaterial ? privateKeyToMoneroMnemonic(moneroMaterial.privateSpendKey) : ''),
+    [moneroMaterial],
   );
 
   const activeMoneroWalletIndex = moneroWallets.findIndex(
-    (wallet) => wallet.id === activeMoneroWalletId
+    (wallet) => wallet.id === activeMoneroWalletId,
   );
 
   async function onImportMnemonic(event: FormEvent<HTMLFormElement>) {
@@ -383,7 +430,9 @@ function App({ variant = 'popup' }: AppProps) {
   }
 
   function onLockWallet() {
-    discardTransactionsViaBackground().catch((failure) => console.error('Unable to discard prepared transaction on lock', failure));
+    discardTransactionsViaBackground().catch((failure) =>
+      console.error('Unable to discard prepared transaction on lock', failure),
+    );
     setIsUnlocked(false);
     setUnlockSecret('');
     setSessionLockSecret(null);
@@ -397,7 +446,10 @@ function App({ variant = 'popup' }: AppProps) {
   useEffect(() => {
     if (!isUnlocked) return;
     let timer = window.setTimeout(onLockWallet, IDLE_LOCK_MS);
-    const restart = () => { window.clearTimeout(timer); timer = window.setTimeout(onLockWallet, IDLE_LOCK_MS); };
+    const restart = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(onLockWallet, IDLE_LOCK_MS);
+    };
     const events = ['pointerdown', 'keydown', 'touchstart'] as const;
     events.forEach((name) => window.addEventListener(name, restart));
     return () => {
@@ -415,7 +467,7 @@ function App({ variant = 'popup' }: AppProps) {
       const material = await unlockMoneroWallet(
         sessionLockSecret,
         networkSettings.monero.networkType,
-        activeMoneroWalletId ?? undefined
+        activeMoneroWalletId ?? undefined,
       );
       setMoneroMaterial(material);
       setMoneroView(material ? 'wallet' : 'add');
@@ -430,10 +482,11 @@ function App({ variant = 'popup' }: AppProps) {
     setError(null);
     setMoneroSetupMode(mode);
     setImportedPrivateSpendKey('');
+    setMoneroHistory('used');
+    setMoneroScanStart('full');
+    setImportRestoreHeight('0');
     setMoneroMaterial(
-      mode === 'generate'
-        ? generateMoneroKeyMaterial(networkSettings?.monero.networkType)
-        : null
+      mode === 'generate' ? generateMoneroKeyMaterial(networkSettings?.monero.networkType) : null,
     );
   }
 
@@ -446,22 +499,43 @@ function App({ variant = 'popup' }: AppProps) {
         throw new Error('Unlock with your password or PIN first.');
       }
       const importedValue = importedPrivateSpendKey.trim();
-      const material = moneroSetupMode === 'import'
-        ? getMoneroKeyMaterialFromPrivateSpendKey(
-          importedValue.includes(' ')
-            ? moneroMnemonicToPrivateKey(importedValue)
-            : importedValue,
-          networkSettings.monero.networkType
-        )
-        : moneroMaterial;
+      const material =
+        moneroSetupMode === 'import'
+          ? getMoneroKeyMaterialFromPrivateSpendKey(
+              importedValue.includes(' ')
+                ? moneroMnemonicToPrivateKey(importedValue)
+                : importedValue,
+              networkSettings.monero.networkType,
+            )
+          : moneroMaterial;
       if (!material) {
         throw new Error('Generate or import Monero key material first.');
       }
       // A freshly generated wallet can't have funds from before now; an imported one might.
-      const restoreHeight = moneroSetupMode === 'import'
-        ? undefined
-        : await currentRestoreHeight(networkSettings.monero);
-      const activeWalletId = await saveMoneroWallet(material, sessionLockSecret, restoreHeight);
+      const useCurrentHeight = moneroSetupMode === 'generate' || moneroHistory === 'unused';
+      const restoreHeight = useCurrentHeight
+        ? await currentRestoreHeight(networkSettings.monero)
+        : moneroScanStart === 'full'
+          ? 0
+          : Number(importRestoreHeight);
+      if (restoreHeight === undefined)
+        throw new Error(
+          'Unable to determine the current block height. Check the selected node before saving an unused address.',
+        );
+      if (
+        (!useCurrentHeight && moneroScanStart === 'height' && !/^\d+$/.test(importRestoreHeight)) ||
+        !Number.isSafeInteger(restoreHeight) ||
+        restoreHeight < 0 ||
+        restoreHeight > 0xffffffff
+      )
+        throw new Error('Enter a valid restore height.');
+      const activeWalletId = await saveMoneroWallet(
+        material,
+        sessionLockSecret,
+        restoreHeight,
+        true,
+        networkSettings.monero.network,
+      );
       const moneroState = await getMoneroWalletState();
       setMoneroMaterial(material);
       setMoneroWallets(moneroState.wallets);
@@ -492,7 +566,7 @@ function App({ variant = 'popup' }: AppProps) {
         moneroMaterial.privateSpendKey,
         moneroMaterial.privateViewKey,
         counterpartyPrivateViewKey.trim(),
-        counterpartyPublicSpendKey.trim()
+        counterpartyPublicSpendKey.trim(),
       );
       setCombinedAddressFromPriv(combined.combinedAddress);
     } catch (err) {
@@ -509,14 +583,14 @@ function App({ variant = 'popup' }: AppProps) {
         publicSpendKeyA.trim(),
         publicViewKeyA.trim(),
         publicSpendKeyB.trim(),
-        publicViewKeyB.trim()
+        publicViewKeyB.trim(),
       );
       setCombinedAddressFromPublic(combined.combinedAddress);
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : 'Unable to compute combined Monero address from public keys.'
+          : 'Unable to compute combined Monero address from public keys.',
       );
     }
   }
@@ -533,15 +607,19 @@ function App({ variant = 'popup' }: AppProps) {
     try {
       const context = recoveryContexts.find((saved) => saved.combinedAddress === recoveryAddress);
       if (!context || isLoadingRecovery) throw new Error('Select a saved combined address first.');
-      const owner = await unlockMoneroWallet(sessionLockSecret, networkSettings.monero.networkType, context.walletId);
+      const owner = await unlockMoneroWallet(
+        sessionLockSecret,
+        networkSettings.monero.networkType,
+        context.walletId,
+      );
       if (!owner) throw new Error('Original swap key material is unavailable.');
       setRecoveredMaterial(
         recoverCombinedWallet(
           owner,
           counterpartyPrivateSpendKey.trim(),
           context,
-          networkSettings.monero.networkType
-        )
+          networkSettings.monero.networkType,
+        ),
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to recover the combined wallet.');
@@ -557,11 +635,19 @@ function App({ variant = 'popup' }: AppProps) {
     setError(null);
     setIsSubmitting(true);
     try {
-      const selected = recoveryContexts.find((saved) => saved.combinedAddress === recoveredMaterial.address);
+      const selected = recoveryContexts.find(
+        (saved) => saved.combinedAddress === recoveredMaterial.address,
+      );
       if (!selected) throw new Error('Select a saved combined address first.');
       const context = await loadMoneroCombinedContext(selected, sessionLockSecret);
       if (!context) throw new Error('Saved swap context is no longer available.');
-      const activeWalletId = await saveMoneroWallet(recoveredMaterial, sessionLockSecret, context.restoreHeight);
+      const activeWalletId = await saveMoneroWallet(
+        recoveredMaterial,
+        sessionLockSecret,
+        context.restoreHeight,
+        true,
+        context.network,
+      );
       const moneroState = await getMoneroWalletState();
       setMoneroMaterial(recoveredMaterial);
       setMoneroWallets(moneroState.wallets);
@@ -588,7 +674,7 @@ function App({ variant = 'popup' }: AppProps) {
       const material = await unlockMoneroWallet(
         sessionLockSecret,
         networkSettings.monero.networkType,
-        walletId
+        walletId,
       );
       setMoneroMaterial(material);
       setActiveMoneroWalletId(walletId);
@@ -599,7 +685,10 @@ function App({ variant = 'popup' }: AppProps) {
 
   async function onBack() {
     setError(null);
-    if (selectedWalletType === 'leakswap' && (moneroView === 'combine' || moneroView === 'recover')) {
+    if (
+      selectedWalletType === 'leakswap' &&
+      (moneroView === 'combine' || moneroView === 'recover')
+    ) {
       setMoneroView('wallet');
       setRecoveredMaterial(null);
       return;
@@ -682,21 +771,50 @@ function App({ variant = 'popup' }: AppProps) {
     <main className={variant === 'full' ? 'popup-root full-root' : 'popup-root'}>
       <div className="app-header">
         <div className="app-header-leading">
-          {isUnlocked && (selectedWalletType === 'algorand'
+          {isUnlocked &&
+          (selectedWalletType === 'algorand'
             ? algorandView !== 'wallet' || mnemonicMode !== null
-            : selectedWalletType === 'leakswap' ? moneroView === 'combine' || moneroView === 'recover' : moneroView !== 'wallet') ? (
-            <button type="button" className="icon-btn" onClick={onBack} title="Back" aria-label="Back">
+            : selectedWalletType === 'leakswap'
+              ? moneroView === 'combine' || moneroView === 'recover'
+              : moneroView !== 'wallet') ? (
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={onBack}
+              title="Back"
+              aria-label="Back"
+            >
               <ArrowLeft size={18} />
             </button>
           ) : null}
           <h1>Zebgen Wallet</h1>
         </div>
         <div className="header-actions">
-          {isUnlocked && selectedWalletType !== 'leakswap' ? <button type="button" className="icon-btn" title="Network settings" aria-label="Network settings" onClick={() => {
-            if (selectedWalletType === 'algorand') setAlgorandView('settings');
-            else setMoneroView('settings');
-          }}><Settings size={18} /></button> : null}
-          {isUnlocked ? <button type="button" className="icon-btn" onClick={onLockWallet} title="Lock wallet" aria-label="Lock wallet"><LockKeyhole size={18} /></button> : null}
+          {isUnlocked && selectedWalletType !== 'leakswap' ? (
+            <button
+              type="button"
+              className="icon-btn"
+              title="Network settings"
+              aria-label="Network settings"
+              onClick={() => {
+                if (selectedWalletType === 'algorand') setAlgorandView('settings');
+                else setMoneroView('settings');
+              }}
+            >
+              <Settings size={18} />
+            </button>
+          ) : null}
+          {isUnlocked ? (
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={onLockWallet}
+              title="Lock wallet"
+              aria-label="Lock wallet"
+            >
+              <LockKeyhole size={18} />
+            </button>
+          ) : null}
           {variant === 'popup' ? (
             <button
               type="button"
@@ -716,55 +834,121 @@ function App({ variant = 'popup' }: AppProps) {
 
       {isUnlocked ? (
         <nav className="chain-tabs" aria-label="Wallet navigation">
-          <button type="button" aria-pressed={selectedWalletType === 'algorand'} onClick={() => {
-            setError(null); setSelectedWalletType('algorand'); setAlgorandView('wallet'); setMoneroView('wallet'); setRecoveredMaterial(null);
-          }}><img src={algorandLogo} alt="" />Algorand</button>
-          <button type="button" aria-pressed={selectedWalletType === 'monero'} onClick={() => {
-            setAlgorandView('wallet'); setRecoveredMaterial(null); onSelectMonero();
-          }}><img src={moneroLogo} alt="" />Monero</button>
-          <button type="button" aria-pressed={selectedWalletType === 'leakswap'} onClick={() => {
-            setError(null); setRecoveredMaterial(null); setMoneroView('wallet'); setSelectedWalletType('leakswap');
-          }}><ArrowLeftRight size={18} />LeakSwap</button>
+          <button
+            type="button"
+            aria-pressed={selectedWalletType === 'algorand'}
+            onClick={() => {
+              setError(null);
+              setSelectedWalletType('algorand');
+              setAlgorandView('wallet');
+              setMoneroView('wallet');
+              setRecoveredMaterial(null);
+            }}
+          >
+            <img src={algorandLogo} alt="" />
+            Algorand
+          </button>
+          <button
+            type="button"
+            aria-pressed={selectedWalletType === 'monero'}
+            onClick={() => {
+              setAlgorandView('wallet');
+              setRecoveredMaterial(null);
+              onSelectMonero();
+            }}
+          >
+            <img src={moneroLogo} alt="" />
+            Monero
+          </button>
+          <button
+            type="button"
+            aria-pressed={selectedWalletType === 'leakswap'}
+            onClick={() => {
+              setError(null);
+              setRecoveredMaterial(null);
+              setMoneroView('wallet');
+              setSelectedWalletType('leakswap');
+            }}
+          >
+            <ArrowLeftRight size={18} />
+            LeakSwap
+          </button>
         </nav>
       ) : null}
 
-      {isUnlocked && selectedWalletType === 'monero' && moneroWallets.length > 0 && moneroView !== 'add' ? (
+      {isUnlocked &&
+      selectedWalletType === 'monero' &&
+      moneroWallets.length > 0 &&
+      moneroView !== 'add' ? (
         <div className="account-selector">
           <label htmlFor="monero-wallet-selector">Wallet</label>
-          <select id="monero-wallet-selector" value={activeMoneroWalletId ?? ''}
-            onChange={(event) => onSelectMoneroWallet(Number(event.target.value))}>
-            {moneroWallets.map((wallet, index) => <option key={wallet.id} value={wallet.id}>
-              Wallet {index + 1} · {wallet.address.slice(0, 6)}...{wallet.address.slice(-6)}
-            </option>)}
+          <select
+            id="monero-wallet-selector"
+            value={activeMoneroWalletId ?? ''}
+            onChange={(event) => onSelectMoneroWallet(Number(event.target.value))}
+          >
+            {moneroWallets.map((wallet, index) => (
+              <option key={wallet.id} value={wallet.id}>
+                Wallet {index + 1} · {wallet.address.slice(0, 6)}...{wallet.address.slice(-6)}
+              </option>
+            ))}
           </select>
         </div>
       ) : null}
 
       {isUnlocked && selectedWalletType === 'algorand' && isSignedIn && algorandView !== 'add' ? (
         <div>
-        <div className="account-selector"><label htmlFor="algorand-wallet-selector">Wallet</label>
-          <select id="algorand-wallet-selector" value={activeAlgoSeedId ?? ''} disabled={isDerivingAddress}
-            onChange={async event => {
-              if (!sessionLockSecret) return;
-              setIsDerivingAddress(true); setError(null);
-              try {
-                const address = await selectAlgoWallet(Number(event.target.value), sessionLockSecret);
-                setAlgoAddress(address); setAddressIndex(0); setAlgorandView('wallet');
-                await refreshAlgoInventory();
-              } catch (failure) { setError(failure instanceof Error ? failure.message : 'Unable to select wallet.'); }
-              finally { setIsDerivingAddress(false); }
-            }}>
-            {algoWallets.map((wallet, index) => <option key={wallet.id} value={wallet.id}>Wallet {index + 1} · {wallet.address.slice(0, 6)}...{wallet.address.slice(-6)}</option>)}
-          </select>
-        </div>
-        <div className="account-selector"><label htmlFor="algorand-address-selector">Address</label>
-          <select id="algorand-address-selector" value={addressIndex} disabled={isDerivingAddress}
-            onChange={(event) => onSelectAddressIndex(Number(event.target.value))}>
-            {Object.entries(algoWallets.find(wallet => wallet.id === activeAlgoSeedId)?.addresses ?? {}).map(([index, address]) => <option key={index} value={index}>
-              {Number(index) + 1} · {address.slice(0, 4)}...{address.slice(-4)} · {algoBalances[address] ?? 'Loading...'}
-            </option>)}
-          </select>
-        </div>
+          <div className="account-selector">
+            <label htmlFor="algorand-wallet-selector">Wallet</label>
+            <select
+              id="algorand-wallet-selector"
+              value={activeAlgoSeedId ?? ''}
+              disabled={isDerivingAddress}
+              onChange={async (event) => {
+                if (!sessionLockSecret) return;
+                setIsDerivingAddress(true);
+                setError(null);
+                try {
+                  const address = await selectAlgoWallet(
+                    Number(event.target.value),
+                    sessionLockSecret,
+                  );
+                  setAlgoAddress(address);
+                  setAddressIndex(0);
+                  setAlgorandView('wallet');
+                  await refreshAlgoInventory();
+                } catch (failure) {
+                  setError(failure instanceof Error ? failure.message : 'Unable to select wallet.');
+                } finally {
+                  setIsDerivingAddress(false);
+                }
+              }}
+            >
+              {algoWallets.map((wallet, index) => (
+                <option key={wallet.id} value={wallet.id}>
+                  Wallet {index + 1} · {wallet.address.slice(0, 6)}...{wallet.address.slice(-6)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="account-selector">
+            <label htmlFor="algorand-address-selector">Address</label>
+            <select
+              id="algorand-address-selector"
+              value={addressIndex}
+              disabled={isDerivingAddress}
+              onChange={(event) => onSelectAddressIndex(Number(event.target.value))}
+            >
+              {Object.entries(
+                algoWallets.find((wallet) => wallet.id === activeAlgoSeedId)?.addresses ?? {},
+              ).map(([index, address]) => (
+                <option key={index} value={index}>
+                  {Number(index) + 1} · {address.slice(0, 4)}...{address.slice(-4)} ·{' '}
+                  {algoBalances[address] ?? 'Loading...'}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       ) : null}
 
@@ -827,11 +1011,11 @@ function App({ variant = 'popup' }: AppProps) {
       ) : null}
 
       {!isLoading &&
-        isLockConfigured &&
-        isUnlocked &&
-        selectedWalletType === 'algorand' &&
-        isSignedIn &&
-        algorandView === 'wallet' ? (
+      isLockConfigured &&
+      isUnlocked &&
+      selectedWalletType === 'algorand' &&
+      isSignedIn &&
+      algorandView === 'wallet' ? (
         <section className="card">
           <h2 className="chain-title">
             <img className="chain-logo" src={algorandLogo} alt="" />
@@ -853,30 +1037,78 @@ function App({ variant = 'popup' }: AppProps) {
             <p className="hint">Loading network...</p>
           )}
           <div className="wallet-action-grid primary-actions">
-            <button className="secondary" type="button" onClick={() => setAlgorandView('transaction')}><ArrowUpRight size={18} />Send ALGO</button>
-            <button className="secondary" type="button" onClick={() => setAlgorandView('receive')}><ArrowDownLeft size={18} />Receive</button>
+            <button
+              className="secondary"
+              type="button"
+              onClick={() => setAlgorandView('transaction')}
+            >
+              <ArrowUpRight size={18} />
+              Send ALGO
+            </button>
+            <button className="secondary" type="button" onClick={() => setAlgorandView('receive')}>
+              <ArrowDownLeft size={18} />
+              Receive
+            </button>
           </div>
           <div className="wallet-action-grid">
-            <button className="secondary" type="button" disabled={isDerivingAddress} onClick={() => onSelectAddressIndex(lastAddressIndex + 1)}><Plus size={18} />{isDerivingAddress ? 'Adding Address...' : 'Add Address'}</button>
-            <button className="secondary" type="button" disabled={isDerivingAddress} onClick={() => { setMnemonicMode(null); setMnemonic(''); setGeneratedMnemonic(''); setAlgorandView('add'); }}><Plus size={18} />Add wallet</button>
+            <button
+              className="secondary"
+              type="button"
+              disabled={isDerivingAddress}
+              onClick={() => onSelectAddressIndex(lastAddressIndex + 1)}
+            >
+              <Plus size={18} />
+              {isDerivingAddress ? 'Adding Address...' : 'Add Address'}
+            </button>
+            <button
+              className="secondary"
+              type="button"
+              disabled={isDerivingAddress}
+              onClick={() => {
+                setMnemonicMode(null);
+                setMnemonic('');
+                setGeneratedMnemonic('');
+                setAlgorandView('add');
+              }}
+            >
+              <Plus size={18} />
+              Add wallet
+            </button>
           </div>
         </section>
       ) : null}
 
-      {isUnlocked && selectedWalletType === 'algorand' && isSignedIn && algorandView === 'receive' && algoAddress && networkSettings ?
-        <Receive chain="algorand" address={algoAddress} network={networkSettings.algorand.network} /> : null}
+      {isUnlocked &&
+      selectedWalletType === 'algorand' &&
+      isSignedIn &&
+      algorandView === 'receive' &&
+      algoAddress &&
+      networkSettings ? (
+        <Receive
+          chain="algorand"
+          address={algoAddress}
+          network={networkSettings.algorand.network}
+        />
+      ) : null}
       {isUnlocked && selectedWalletType === 'algorand' && algorandView === 'settings' ? (
-        <section><h2>Algorand settings</h2>
-          {networkSettings ? <NetworkSettingsPanel chain="algorand" settings={networkSettings} onChange={updateNetworkSettings} /> : null}
+        <section>
+          <h2>Algorand settings</h2>
+          {networkSettings ? (
+            <NetworkSettingsPanel
+              chain="algorand"
+              settings={networkSettings}
+              onChange={updateNetworkSettings}
+            />
+          ) : null}
           <RevealSeedPhrase />
         </section>
       ) : null}
 
       {!isLoading &&
-        isUnlocked &&
-        selectedWalletType === 'algorand' &&
-        isSignedIn &&
-        algorandView === 'transaction' ? (
+      isUnlocked &&
+      selectedWalletType === 'algorand' &&
+      isSignedIn &&
+      algorandView === 'transaction' ? (
         <section className="card">
           <h2 className="chain-title">
             <img className="chain-logo" src={algorandLogo} alt="" />
@@ -899,16 +1131,18 @@ function App({ variant = 'popup' }: AppProps) {
       ) : null}
 
       {!isLoading &&
-        isLockConfigured &&
-        isUnlocked &&
-        selectedWalletType === 'algorand' &&
-        ((!isSignedIn && algorandView === 'wallet') || algorandView === 'add') ? (
+      isLockConfigured &&
+      isUnlocked &&
+      selectedWalletType === 'algorand' &&
+      ((!isSignedIn && algorandView === 'wallet') || algorandView === 'add') ? (
         <section className="card">
           <h2 className="chain-title">
             <img className="chain-logo" src={algorandLogo} alt="" />
             Add Algorand address?
           </h2>
-          <p className="hint">Generate a new 24-word Algorand mnemonic or import an existing mnemonic.</p>
+          <p className="hint">
+            Generate a new 24-word Algorand mnemonic or import an existing mnemonic.
+          </p>
 
           <form className="import-form" onSubmit={onImportMnemonic}>
             {mnemonicMode === null ? (
@@ -948,7 +1182,10 @@ function App({ variant = 'popup' }: AppProps) {
             {mnemonicMode === 'generate' ? (
               <>
                 <label htmlFor="generated-mnemonic">Recovery mnemonic</label>
-                <p className="seed-warning">Write down these 24 words in order and keep them somewhere safe offline. They recover your Algorand wallet. Never share them.</p>
+                <p className="seed-warning">
+                  Write down these 24 words in order and keep them somewhere safe offline. They
+                  recover your Algorand wallet. Never share them.
+                </p>
                 <textarea
                   id="generated-mnemonic"
                   className="mnemonic-input mnemonic-valid"
@@ -963,10 +1200,7 @@ function App({ variant = 'popup' }: AppProps) {
             ) : null}
 
             {mnemonicMode !== null ? (
-              <button
-                type="submit"
-                disabled={isSubmitting || mnemonicValidationState !== 'valid'}
-              >
+              <button type="submit" disabled={isSubmitting || mnemonicValidationState !== 'valid'}>
                 {isSubmitting ? 'Encrypting...' : 'Encrypt and Save'}
               </button>
             ) : null}
@@ -975,22 +1209,33 @@ function App({ variant = 'popup' }: AppProps) {
       ) : null}
 
       {!isLoading &&
-        isLockConfigured &&
-        isUnlocked &&
-        selectedWalletType === 'monero' &&
-        moneroView === 'add' ? (
+      isLockConfigured &&
+      isUnlocked &&
+      selectedWalletType === 'monero' &&
+      moneroView === 'add' ? (
         <section className="card">
           <h2 className="chain-title">
             <img className="chain-logo" src={moneroLogo} alt="" />
             Add Monero address?
           </h2>
-          <p className="hint">Generate a new 25-word Monero mnemonic or import an existing mnemonic or private spend key.</p>
+          <p className="hint">
+            Generate a new 25-word Monero mnemonic or import an existing mnemonic or private spend
+            key.
+          </p>
           {moneroSetupMode === null ? (
             <div className="seed-choice-group" role="group" aria-label="Monero key source">
-              <button type="button" className="choice-button" onClick={() => onSelectMoneroSetupMode('generate')}>
+              <button
+                type="button"
+                className="choice-button"
+                onClick={() => onSelectMoneroSetupMode('generate')}
+              >
                 Generate mnemonic
               </button>
-              <button type="button" className="choice-button" onClick={() => onSelectMoneroSetupMode('import')}>
+              <button
+                type="button"
+                className="choice-button"
+                onClick={() => onSelectMoneroSetupMode('import')}
+              >
                 Import mnemonic
               </button>
             </div>
@@ -1009,6 +1254,44 @@ function App({ variant = 'popup' }: AppProps) {
                     rows={4}
                     required
                   />
+                  <label htmlFor="monero-address-history">Address history</label>
+                  <select
+                    id="monero-address-history"
+                    value={moneroHistory}
+                    onChange={(event) => setMoneroHistory(event.target.value as 'unused' | 'used')}
+                  >
+                    <option value="used">Has received funds before</option>
+                    <option value="unused">Never used</option>
+                  </select>
+                  {moneroHistory === 'used' ? (
+                    <>
+                      <label htmlFor="monero-scan-start">Scan start</label>
+                      <select
+                        id="monero-scan-start"
+                        value={moneroScanStart}
+                        onChange={(event) =>
+                          setMoneroScanStart(event.target.value as 'full' | 'height')
+                        }
+                      >
+                        <option value="full">Full history (block 0)</option>
+                        <option value="height">Specific block height</option>
+                      </select>
+                      {moneroScanStart === 'height' ? (
+                        <>
+                          <label htmlFor="monero-import-height">Restore height</label>
+                          <input
+                            id="monero-import-height"
+                            inputMode="numeric"
+                            required
+                            value={importRestoreHeight}
+                            onChange={(event) =>
+                              setImportRestoreHeight(sanitizeBlockHeight(event.target.value))
+                            }
+                          />
+                        </>
+                      ) : null}
+                    </>
+                  ) : null}
                 </>
               ) : null}
               {moneroSetupMode === 'generate' && moneroMaterial ? (
@@ -1021,10 +1304,17 @@ function App({ variant = 'popup' }: AppProps) {
                     rows={4}
                     readOnly
                   />
-                  <button type="button" className="secondary" onClick={() => onSelectMoneroSetupMode('generate')}>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => onSelectMoneroSetupMode('generate')}
+                  >
                     Regenerate mnemonic
                   </button>
-                  <p className="seed-warning">Store these 25 words offline. They recover this Monero address and its private spend key.</p>
+                  <p className="seed-warning">
+                    Store these 25 words offline. They recover this Monero address and its private
+                    spend key.
+                  </p>
                 </>
               ) : null}
               <button type="submit" disabled={isSubmitting}>
@@ -1035,7 +1325,11 @@ function App({ variant = 'popup' }: AppProps) {
         </section>
       ) : null}
 
-      {!isLoading && isUnlocked && selectedWalletType === 'monero' && moneroWallets.length > 0 && moneroView === 'wallet' ? (
+      {!isLoading &&
+      isUnlocked &&
+      selectedWalletType === 'monero' &&
+      moneroWallets.length > 0 &&
+      moneroView === 'wallet' ? (
         <section className="card">
           <h2 className="chain-title">
             <img className="chain-logo" src={moneroLogo} alt="" />
@@ -1046,7 +1340,10 @@ function App({ variant = 'popup' }: AppProps) {
               material={moneroMaterial}
               walletId={activeMoneroWalletId!}
               lockSecret={sessionLockSecret!}
-              restoreHeight={moneroWallets[activeMoneroWalletIndex]?.restoreHeight}
+              restoreHeight={walletRestoreHeight(
+                moneroWallets[activeMoneroWalletIndex],
+                networkSettings.monero.network,
+              )}
               settings={networkSettings}
               onChangeNetwork={switchMoneroNetwork}
               onOpenSettings={() => setMoneroView('settings')}
@@ -1059,15 +1356,27 @@ function App({ variant = 'popup' }: AppProps) {
             <p className="hint">Loading Monero wallet...</p>
           )}
           <div className="wallet-action-grid primary-actions">
-            <button type="button" className="secondary" onClick={() => setMoneroView('transaction')}>
-              <ArrowUpRight size={18} />Send XMR
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setMoneroView('transaction')}
+            >
+              <ArrowUpRight size={18} />
+              Send XMR
             </button>
-            <button type="button" className="secondary" onClick={() => setMoneroView('receive')}><ArrowDownLeft size={18} />Receive</button>
+            <button type="button" className="secondary" onClick={() => setMoneroView('receive')}>
+              <ArrowDownLeft size={18} />
+              Receive
+            </button>
           </div>
-          {networkSettings && moneroMaterial && sessionLockSecret ? <MoneroActivity
-            key={JSON.stringify([moneroMaterial.address, networkSettings.monero])}
-            address={moneroMaterial.address} config={networkSettings.monero} lockSecret={sessionLockSecret}
-          /> : null}
+          {networkSettings && moneroMaterial && sessionLockSecret ? (
+            <MoneroActivity
+              key={JSON.stringify([moneroMaterial.address, networkSettings.monero])}
+              address={moneroMaterial.address}
+              config={networkSettings.monero}
+              lockSecret={sessionLockSecret}
+            />
+          ) : null}
           <div className="wallet-action-grid">
             <button
               type="button"
@@ -1077,24 +1386,48 @@ function App({ variant = 'popup' }: AppProps) {
                 setMoneroView('add');
               }}
             >
-              <Plus size={18} />Add Address
+              <Plus size={18} />
+              Add Address
             </button>
           </div>
         </section>
       ) : null}
 
-      {isUnlocked && selectedWalletType === 'leakswap' && moneroView !== 'combine' && moneroView !== 'recover' ?
-        <LeakSwapPanel key={`${networkSettings?.algorand.network}-${networkSettings?.algorand.algod.server}`} lockSecret={sessionLockSecret} onRecover={() => setMoneroView('recover')} /> : null}
-      {isUnlocked && selectedWalletType === 'monero' && moneroMaterial && networkSettings && moneroView === 'receive' ?
-        <Receive chain="monero" address={moneroMaterial.address} network={networkSettings.monero.network} /> : null}
+      {isUnlocked &&
+      selectedWalletType === 'leakswap' &&
+      moneroView !== 'combine' &&
+      moneroView !== 'recover' ? (
+        <LeakSwapPanel
+          key={`${networkSettings?.algorand.network}-${networkSettings?.algorand.algod.server}`}
+          lockSecret={sessionLockSecret}
+          onRecover={() => setMoneroView('recover')}
+        />
+      ) : null}
+      {isUnlocked &&
+      selectedWalletType === 'monero' &&
+      moneroMaterial &&
+      networkSettings &&
+      moneroView === 'receive' ? (
+        <Receive
+          chain="monero"
+          address={moneroMaterial.address}
+          network={networkSettings.monero.network}
+        />
+      ) : null}
 
-      {!isLoading && isUnlocked && selectedWalletType === 'monero' && moneroView === 'transaction' ? (
+      {!isLoading &&
+      isUnlocked &&
+      selectedWalletType === 'monero' &&
+      moneroView === 'transaction' ? (
         <section className="card">
           <h2 className="chain-title">
             <img className="chain-logo" src={moneroLogo} alt="" />
             Send XMR
           </h2>
-          {networkSettings && moneroMaterial && sessionLockSecret && activeMoneroWalletId !== null ? (
+          {networkSettings &&
+          moneroMaterial &&
+          sessionLockSecret &&
+          activeMoneroWalletId !== null ? (
             <TransactionBuilder
               key={moneroMaterial.address}
               chain="monero"
@@ -1102,7 +1435,10 @@ function App({ variant = 'popup' }: AppProps) {
               config={networkSettings.monero}
               walletId={activeMoneroWalletId}
               lockSecret={sessionLockSecret}
-              defaultRestoreHeight={moneroWallets[activeMoneroWalletIndex]?.restoreHeight}
+              defaultRestoreHeight={walletRestoreHeight(
+                moneroWallets[activeMoneroWalletIndex],
+                networkSettings.monero.network,
+              )}
             />
           ) : (
             <p className="hint">Loading transaction builder...</p>
@@ -1125,7 +1461,9 @@ function App({ variant = 'popup' }: AppProps) {
           ) : (
             <p className="hint">Loading network settings...</p>
           )}
-          {moneroMaterial ? <MoneroRecovery key={moneroMaterial.address} material={moneroMaterial} /> : null}
+          {moneroMaterial ? (
+            <MoneroRecovery key={moneroMaterial.address} material={moneroMaterial} />
+          ) : null}
         </section>
       ) : null}
 
@@ -1138,24 +1476,66 @@ function App({ variant = 'popup' }: AppProps) {
           <form className="import-form flow-panel" onSubmit={onComputeCombinedFromPrivateAndPublic}>
             <h3>Use your saved key</h3>
             <label htmlFor="counterparty-private-view">Counterparty private view key</label>
-            <input id="counterparty-private-view" value={counterpartyPrivateViewKey} onChange={(event) => setCounterpartyPrivateViewKey(event.target.value)} required />
+            <input
+              id="counterparty-private-view"
+              value={counterpartyPrivateViewKey}
+              onChange={(event) => setCounterpartyPrivateViewKey(event.target.value)}
+              required
+            />
             <label htmlFor="counterparty-public-spend">Counterparty public spend key</label>
-            <input id="counterparty-public-spend" value={counterpartyPublicSpendKey} onChange={(event) => setCounterpartyPublicSpendKey(event.target.value)} required />
-            <button type="submit" disabled={!moneroMaterial}>Combine</button>
-            {combinedAddressFromPriv ? <div className="receive-address"><code>{combinedAddressFromPriv}</code><CopyValue value={combinedAddressFromPriv} label="combined address" /></div> : null}
+            <input
+              id="counterparty-public-spend"
+              value={counterpartyPublicSpendKey}
+              onChange={(event) => setCounterpartyPublicSpendKey(event.target.value)}
+              required
+            />
+            <button type="submit" disabled={!moneroMaterial}>
+              Combine
+            </button>
+            {combinedAddressFromPriv ? (
+              <div className="receive-address">
+                <code>{combinedAddressFromPriv}</code>
+                <CopyValue value={combinedAddressFromPriv} label="combined address" />
+              </div>
+            ) : null}
           </form>
           <form className="import-form flow-panel" onSubmit={onComputeCombinedFromPublic}>
             <h3>Use two public key pairs</h3>
             <label htmlFor="pub-spend-a">Public spend key A</label>
-            <input id="pub-spend-a" value={publicSpendKeyA} onChange={(event) => setPublicSpendKeyA(event.target.value)} required />
+            <input
+              id="pub-spend-a"
+              value={publicSpendKeyA}
+              onChange={(event) => setPublicSpendKeyA(event.target.value)}
+              required
+            />
             <label htmlFor="pub-view-a">Public view key A</label>
-            <input id="pub-view-a" value={publicViewKeyA} onChange={(event) => setPublicViewKeyA(event.target.value)} required />
+            <input
+              id="pub-view-a"
+              value={publicViewKeyA}
+              onChange={(event) => setPublicViewKeyA(event.target.value)}
+              required
+            />
             <label htmlFor="pub-spend-b">Public spend key B</label>
-            <input id="pub-spend-b" value={publicSpendKeyB} onChange={(event) => setPublicSpendKeyB(event.target.value)} required />
+            <input
+              id="pub-spend-b"
+              value={publicSpendKeyB}
+              onChange={(event) => setPublicSpendKeyB(event.target.value)}
+              required
+            />
             <label htmlFor="pub-view-b">Public view key B</label>
-            <input id="pub-view-b" value={publicViewKeyB} onChange={(event) => setPublicViewKeyB(event.target.value)} required />
+            <input
+              id="pub-view-b"
+              value={publicViewKeyB}
+              onChange={(event) => setPublicViewKeyB(event.target.value)}
+              required
+            />
             <button type="submit">Combine Public Keys</button>
-            {combinedAddressFromPublic ? <div className="receive-address"><code>{combinedAddressFromPublic}</code><CopyValue value={combinedAddressFromPublic} label="combined address" /></div> : null}
+            {combinedAddressFromPublic ? (
+              <div className="receive-address">
+                <code>{combinedAddressFromPublic}</code>
+                <CopyValue value={combinedAddressFromPublic} label="combined address" />
+              </div>
+            ) : null}
           </form>
         </section>
       ) : null}
@@ -1166,18 +1546,49 @@ function App({ variant = 'popup' }: AppProps) {
             <img className="chain-logo" src={moneroLogo} alt="" />
             Recover Combined Wallet
           </h2>
-          <p className="hint">Add the counterparty's leaked private spend key to your saved key to gain full spend and view control of the combined address.</p>
+          <p className="hint">
+            Add the counterparty's leaked private spend key to your saved key to gain full spend and
+            view control of the combined address.
+          </p>
           <form className="import-form" onSubmit={onRecoverCombinedWallet}>
             <label htmlFor="recovery-combined-address">Combined address</label>
-            <select id="recovery-combined-address" value={recoveryAddress} disabled={isLoadingRecovery || isSubmitting}
-              onChange={(event) => { setRecoveryAddress(event.target.value); setRecoveredMaterial(null); setError(null); }}>
+            <select
+              id="recovery-combined-address"
+              value={recoveryAddress}
+              disabled={isLoadingRecovery || isSubmitting}
+              onChange={(event) => {
+                setRecoveryAddress(event.target.value);
+                setRecoveredMaterial(null);
+                setError(null);
+              }}
+            >
               <option value="">{isLoadingRecovery ? 'Loading...' : 'Select saved address'}</option>
-              {recoveryContexts.map((context) => <option key={context.combinedAddress} value={context.combinedAddress}>{context.combinedAddress}</option>)}
+              {recoveryContexts.map((context) => (
+                <option key={context.combinedAddress} value={context.combinedAddress}>
+                  {context.combinedAddress}
+                </option>
+              ))}
             </select>
-            {!isLoadingRecovery && recoveryContexts.length === 0 ? <p className="error">No saved swap context for this wallet and network.</p> : null}
+            {!isLoadingRecovery && recoveryContexts.length === 0 ? (
+              <p className="error">No saved swap context for this wallet and network.</p>
+            ) : null}
             <label htmlFor="counterparty-private-spend">Counterparty private spend key</label>
-            <input id="counterparty-private-spend" value={counterpartyPrivateSpendKey} onChange={(event) => { setCounterpartyPrivateSpendKey(event.target.value); setRecoveredMaterial(null); setError(null); }} placeholder="64 hexadecimal characters" autoComplete="off" disabled={isSubmitting} required />
-            <button type="submit" disabled={isLoadingRecovery || !recoveryAddress || isSubmitting}>Recover Full Key Material</button>
+            <input
+              id="counterparty-private-spend"
+              value={counterpartyPrivateSpendKey}
+              onChange={(event) => {
+                setCounterpartyPrivateSpendKey(event.target.value);
+                setRecoveredMaterial(null);
+                setError(null);
+              }}
+              placeholder="64 hexadecimal characters"
+              autoComplete="off"
+              disabled={isSubmitting}
+              required
+            />
+            <button type="submit" disabled={isLoadingRecovery || !recoveryAddress || isSubmitting}>
+              Recover Full Key Material
+            </button>
           </form>
           {recoveredMaterial ? (
             <div className="flow-panel">

@@ -31,7 +31,8 @@ requests cannot overwrite a newer result. Monero balances are scanned explicitly
 from the chosen restore height, then poll for changed daemon heights every five
 seconds. Balance scans show block progress and can be stopped; Stop aborts active
 scan requests, pauses automatic rescans, and enables changing the restore height
-before scanning again. Partial results are discarded. Send review shows the prepared amount, fee, and
+before scanning again. Each completed batch is retained for resumption using the
+incremental WASM API. Send review shows the prepared amount, fee, and
 total debit; confirmation submits the retained signed transaction.
 
 ### Selected Chain And Endpoint
@@ -49,10 +50,36 @@ require loopback endpoints. These checks detect configuration errors, not dishon
 nodes impersonating a chain. Offline Receive displays the selected chain, not a
 claim of a verified live connection.
 
-Balance-scan cancellation and progress use the exact published dependency
-`zebgen-monero-wasm@0.4.0`. No sibling WASM checkout is required to install or
-build the extension. Transaction preparation is separate from cancellable
-balance scans.
+Incremental balance scanning, cancellation, and progress use the exact published
+dependency `zebgen-monero-wasm@0.5.0`. No sibling WASM checkout is required to install
+or build the extension. Transaction preparation is separate from cancellable
+balance scans and still performs its own independent scan.
+
+### Monero Scan Lifetime
+
+Balance scans run in a separate inactive extension tab. Closing the popup or
+locking the wallet UI detaches that viewer without stopping the scan. Reopening
+the matching wallet reconnects to the active scan. Stop explicitly cancels the job.
+Keep the scan tab open while work is in progress; closing it, browser shutdown,
+tab discard, or extension reload can interrupt execution.
+
+With the new `scanBalanceBatch` WASM API, each completed 100-block batch saves an
+encrypted output ledger and cursor, scoped to the wallet, network, daemon, and
+restore height. Locked outputs are retained and spent status is checked again on
+completion. A changed chain anchor invalidates the checkpoint and restarts from
+the chosen restore height. This avoids ordinary repeated historical scanning,
+but reorgs, lost/corrupt storage, another endpoint, or a changed restore height can
+require a rescan. Checkpoints are not an external backup.
+
+The scan tab retains its scan credentials in memory until completion, even after
+the wallet UI locks. They are not persisted in plaintext. After browser restart,
+unlock and explicitly resume; the password and keys are not saved for unattended
+restart. Transaction preparation still performs its own independent scan.
+
+Restore heights are network-specific. Unrecognized legacy network metadata falls
+back to block 0, never a different network's height. Imported mnemonics default to
+previously funded: scan from block 0 or an explicit restore height. New or explicitly
+unused wallets start near the selected daemon tip (20-block safety overlap).
 
 ## Installing a release build (testers)
 
@@ -219,6 +246,7 @@ zebgen extension (keys never leave)              any Monero node you choose
 ### How it was checked
 
 Against a local Monero regtest network:
+
 - 200 random key sets produce identical public keys and addresses in
   zebgen-monero-wasm and zebgen's own TypeScript code, on all three networks.
 - A full send (mine, scan, send 1 XMR, check change) was confirmed

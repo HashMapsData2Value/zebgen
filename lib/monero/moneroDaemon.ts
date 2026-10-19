@@ -3,15 +3,17 @@ import initMoneroWasm, {
   daemonHeight,
   primaryAddress,
   publicKeyFromPrivate,
+  scanBalanceBatch,
   sweepTransaction,
-  unlockedBalance,
 } from 'zebgen-monero-wasm';
 import moneroWasmUrl from 'zebgen-monero-wasm/zebgen_monero_wasm_bg.wasm?url&no-inline';
 import * as moneroWasm from 'zebgen-monero-wasm';
 
 import { networkLabel, type MoneroNetworkConfig } from '../network/networks';
 import { unlockMoneroWallet } from '../wallet/moneroVault';
-
+import { balanceCheckpointKey, saveBalanceCheckpoint } from '../wallet/moneroBalanceCache';
+import { loadScanCheckpoint, saveScanCheckpoint } from '../wallet/moneroScanCheckpoint';
+import { setMoneroScanRestoreHeight } from '../wallet/db';
 
 let wasmReady: Promise<unknown> | undefined;
 let diagnosticMemory: WebAssembly.Memory | undefined;
@@ -19,7 +21,9 @@ function loadMoneroWasm(): Promise<unknown> {
   // Explicit URL: the bundled service worker has no usable import.meta.url.
   wasmReady ??= initMoneroWasm({ module_or_path: moneroWasmUrl }).then((module) => {
     if (import.meta.env.MODE === 'e2e') {
-      (moneroWasm as unknown as { setDiagnosticsEnabled?: (enabled: boolean) => void }).setDiagnosticsEnabled?.(true);
+      (
+        moneroWasm as unknown as { setDiagnosticsEnabled?: (enabled: boolean) => void }
+      ).setDiagnosticsEnabled?.(true);
       diagnosticMemory = module.memory;
     }
     return module;
@@ -47,19 +51,35 @@ export async function scanMoneroFunding(
   publicSpendKey: string,
   privateViewKey: string,
   restoreHeight: number,
-  control?: MoneroFundingControl
+  control?: MoneroFundingControl,
 ): Promise<MoneroFundingResult> {
   if (!Number.isInteger(restoreHeight) || restoreHeight < 0 || restoreHeight > 0xffffffff) {
     throw new Error('Restore height must be a u32 integer.');
   }
   await verifyMoneroNetwork(config);
   control?.signal?.throwIfAborted();
-  const scan = (moneroWasm as unknown as {
-    scanFunding?: (url: string, user: string | undefined, pass: string | undefined,
-      publicSpendKey: string, privateViewKey: string, restoreHeight: number, control?: MoneroFundingControl) => Promise<MoneroFundingResult>;
-  }).scanFunding;
-  if (!scan) throw new Error('The Monero WASM library needs the scanFunding update to check funding.');
-  const result = await scan(...daemonConnection(config), publicSpendKey, privateViewKey, restoreHeight, control);
+  const scan = (
+    moneroWasm as unknown as {
+      scanFunding?: (
+        url: string,
+        user: string | undefined,
+        pass: string | undefined,
+        publicSpendKey: string,
+        privateViewKey: string,
+        restoreHeight: number,
+        control?: MoneroFundingControl,
+      ) => Promise<MoneroFundingResult>;
+    }
+  ).scanFunding;
+  if (!scan)
+    throw new Error('The Monero WASM library needs the scanFunding update to check funding.');
+  const result = await scan(
+    ...daemonConnection(config),
+    publicSpendKey,
+    privateViewKey,
+    restoreHeight,
+    control,
+  );
   return {
     receivedAtomic: result.receivedAtomic,
     matureAtomic: result.matureAtomic,
@@ -71,18 +91,37 @@ export async function scanMoneroFunding(
 
 export async function verifyMoneroNetwork(config: MoneroNetworkConfig): Promise<string> {
   await loadMoneroWasm();
-  const detect = (moneroWasm as unknown as { daemonNetwork?: (url: string, username?: string, password?: string) => Promise<string> }).daemonNetwork;
-  if (!detect) throw new Error('The Monero WASM library needs the daemonNetwork update to verify the connected chain.');
+  const detect = (
+    moneroWasm as unknown as {
+      daemonNetwork?: (url: string, username?: string, password?: string) => Promise<string>;
+    }
+  ).daemonNetwork;
+  if (!detect)
+    throw new Error(
+      'The Monero WASM library needs the daemonNetwork update to verify the connected chain.',
+    );
   const actual = await detect(...daemonConnection(config));
-  if (actual !== config.network) throw new Error(`Network mismatch: selected ${networkLabel(config.network)}, daemon reports ${networkLabel(actual)}. Select the matching network in Settings.`);
-  if (actual === 'regtest' && !['127.0.0.1', 'localhost', '[::1]'].includes(new URL(config.daemon.uri).hostname)) {
+  if (actual !== config.network)
+    throw new Error(
+      `Network mismatch: selected ${networkLabel(config.network)}, daemon reports ${networkLabel(actual)}. Select the matching network in Settings.`,
+    );
+  if (
+    actual === 'regtest' &&
+    !['127.0.0.1', 'localhost', '[::1]'].includes(new URL(config.daemon.uri).hostname)
+  ) {
     throw new Error('Local Regtest requires a loopback daemon endpoint.');
   }
   return actual;
 }
 
-function daemonConnection(config: MoneroNetworkConfig): [string, string | undefined, string | undefined] {
-  return [config.daemon.uri, config.daemon.username || undefined, config.daemon.password || undefined];
+function daemonConnection(
+  config: MoneroNetworkConfig,
+): [string, string | undefined, string | undefined] {
+  return [
+    config.daemon.uri,
+    config.daemon.username || undefined,
+    config.daemon.password || undefined,
+  ];
 }
 
 function errorMessage(err: unknown): string {
@@ -110,23 +149,93 @@ export interface ScanMoneroBalanceResult {
   error?: string;
 }
 
-export async function scanMoneroBalance(request: ScanMoneroBalanceRequest, control?: MoneroFundingControl): Promise<ScanMoneroBalanceResult> {
+export async function scanMoneroBalance(
+  request: ScanMoneroBalanceRequest,
+  control?: MoneroFundingControl,
+): Promise<ScanMoneroBalanceResult> {
   try {
     control?.signal?.throwIfAborted();
     await verifyMoneroNetwork(request.config);
     control?.signal?.throwIfAborted();
-    if (diagnosticMemory) console.log('[monero-wasm] balance memory before scan:', diagnosticMemory.buffer.byteLength);
-    if (!Number.isSafeInteger(request.restoreHeight) || request.restoreHeight < 0) {
+    if (diagnosticMemory)
+      console.log('[monero-wasm] balance memory before scan:', diagnosticMemory.buffer.byteLength);
+    if (
+      !Number.isSafeInteger(request.restoreHeight) ||
+      request.restoreHeight < 0 ||
+      request.restoreHeight > 0xffffffff
+    ) {
       throw new Error('Restore height must be a non-negative integer.');
     }
-    const material = await unlockMoneroWallet(request.lockSecret, request.config.networkType, request.walletId);
+    const material = await unlockMoneroWallet(
+      request.lockSecret,
+      request.config.networkType,
+      request.walletId,
+    );
     control?.signal?.throwIfAborted();
-    if (!material || material.address !== request.primaryAddress) throw new Error('Wallet address changed. Refresh the wallet and try again.');
+    if (!material || material.address !== request.primaryAddress)
+      throw new Error('Wallet address changed. Refresh the wallet and try again.');
+    const currentHeight = await daemonHeight(...daemonConnection(request.config));
+    if (request.restoreHeight > currentHeight)
+      throw new Error('Restore height is beyond the daemon height.');
+    if (request.walletId >= 0)
+      await setMoneroScanRestoreHeight(
+        request.walletId,
+        request.config.network,
+        request.restoreHeight,
+      );
     await loadMoneroWasm();
-    const balanceAtomic = await unlockedBalance(...daemonConnection(request.config),
-      material.privateSpendKey, material.privateViewKey, request.restoreHeight, control);
+    const identity = balanceCheckpointKey(
+      request.config.network,
+      request.config.daemon.uri,
+      request.primaryAddress,
+      request.restoreHeight,
+    );
+    let checkpoint = await loadScanCheckpoint(identity, request.lockSecret);
+    let balanceAtomic = '0';
+    for (;;) {
+      control?.signal?.throwIfAborted();
+      const result = JSON.parse(
+        await scanBalanceBatch(
+          ...daemonConnection(request.config),
+          material.privateSpendKey,
+          material.privateViewKey,
+          request.restoreHeight,
+          checkpoint === undefined ? undefined : JSON.stringify(checkpoint),
+          { signal: control?.signal },
+        ),
+      );
+      if (
+        !Number.isSafeInteger(result.scannedHeight) ||
+        !Number.isSafeInteger(result.targetHeight) ||
+        typeof result.done !== 'boolean' ||
+        typeof result.balanceAtomic !== 'string' ||
+        !/^\d+$/.test(result.balanceAtomic)
+      )
+        throw new Error('Invalid Monero scan batch result.');
+      await saveScanCheckpoint(identity, result.checkpoint, request.lockSecret);
+      checkpoint = result.checkpoint;
+      control?.onProgress?.({
+        scannedHeight: result.scannedHeight,
+        targetHeight: result.targetHeight,
+      });
+      if (result.done) {
+        balanceAtomic = result.balanceAtomic;
+        await saveBalanceCheckpoint(
+          identity,
+          {
+            balanceAtomic,
+            scannedHeight: result.scannedHeight,
+            scannedAt: Date.now(),
+            resumable: true,
+          },
+          request.lockSecret,
+        );
+        break;
+      }
+    }
     control?.signal?.throwIfAborted();
-    if (diagnosticMemory) console.log('[monero-wasm] balance memory after scan:', diagnosticMemory.buffer.byteLength);
+    if (diagnosticMemory)
+      console.log('[monero-wasm] balance memory after scan:', diagnosticMemory.buffer.byteLength);
     return { ok: true, balanceAtomic };
   } catch (error) {
     console.error('scanMoneroBalance failed', error);
@@ -160,7 +269,7 @@ export interface CreateMoneroTransactionResult {
 }
 
 export async function probeMoneroDaemon(
-  config: MoneroNetworkConfig
+  config: MoneroNetworkConfig,
 ): Promise<MoneroDaemonProbeResult> {
   try {
     const network = await verifyMoneroNetwork(config);
@@ -172,7 +281,7 @@ export async function probeMoneroDaemon(
 }
 
 export async function createMoneroTransaction(
-  request: CreateMoneroTransactionRequest
+  request: CreateMoneroTransactionRequest,
 ): Promise<CreateMoneroTransactionResult> {
   if (!Number.isInteger(request.restoreHeight) || request.restoreHeight < 0) {
     return { ok: false, error: 'Restore height must be a non-negative integer.' };
@@ -189,7 +298,7 @@ export async function createMoneroTransaction(
     const derivedAddress = primaryAddress(
       request.config.networkType,
       publicKeyFromPrivate(request.privateSpendKey),
-      request.privateViewKey
+      request.privateViewKey,
     );
     if (derivedAddress !== request.primaryAddress) {
       return { ok: false, error: 'Wallet keys do not match the wallet address.' };
@@ -211,8 +320,8 @@ export async function createMoneroTransaction(
       relayed: boolean;
       txHex: string;
     } = request.sweep
-        ? await sweepTransaction(...wallet, request.relay)
-        : await createTransaction(...wallet, amountAtomic.toString(), request.relay);
+      ? await sweepTransaction(...wallet, request.relay)
+      : await createTransaction(...wallet, amountAtomic.toString(), request.relay);
     return {
       ok: true,
       hash: transaction.hash,
