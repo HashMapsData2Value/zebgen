@@ -1,3 +1,10 @@
+## [1.5.1](https://github.com/HashMapsData2Value/zebgen/compare/v1.5.0...v1.5.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* **release:** name browser archives with version and browser ([981d23c](https://github.com/HashMapsData2Value/zebgen/commit/981d23ca5f5db7c5a2c19df9280c1af98695504c))
+
 # [1.5.0](https://github.com/HashMapsData2Value/zebgen/compare/v1.4.0...v1.5.0) (2026-10-19)
 
 
