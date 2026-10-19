@@ -1,3 +1,15 @@
+# [1.7.0](https://github.com/HashMapsData2Value/zebgen/compare/v1.6.0...v1.7.0) (2026-10-19)
+
+
+### Bug Fixes
+
+* **security:** enforce swap timing floors and dedicated key shares ([be7bd3f](https://github.com/HashMapsData2Value/zebgen/commit/be7bd3fa25a2eae37842465e056b463d20a740d4))
+
+
+### Features
+
+* **wallet:** add encrypted portable swap backups ([f3273e6](https://github.com/HashMapsData2Value/zebgen/commit/f3273e69d424ac4047461c321afc9f12be471043))
+
 # [1.6.0](https://github.com/HashMapsData2Value/zebgen/compare/v1.5.1...v1.6.0) (2026-10-19)
 
 
