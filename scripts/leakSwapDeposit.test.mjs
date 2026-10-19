@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import * as jsx from 'react/jsx-runtime';
+import * as timingPolicy from '../lib/wallet/swapTimingPolicy.ts';
 
 function load(path, dependencies = {}, globals = {}) {
   const api = {};
@@ -29,7 +30,7 @@ test('deposit payload accepts only an authenticated identity, never page-selecte
 });
 
 function vault() {
-  const offer = { algoAmount: '5000000', xmrAmount: '100000000001', t0: 2000000000, t1: 2000001000,
+  const offer = { algoAmount: '5000000', xmrAmount: '100000000001', t0: 2000000000, t1: 2000007200,
     algoGenesisHash: 'genesis', moneroNetwork: 'regtest', aliAlgoAddress: 'ali', aliPublicSpendKey: 'ali-spend', aliPrivateViewKey: 'ali-view' };
   const xin = { xinAlgoAddress: 'xin', xinPublicSpendKey: 'xin-spend', xinPrivateViewKey: 'xin-view' };
   const state = { role: 'xin', walletId: 7, ready: 0n, balance: 5000000n, sponsorBalance: 209000n, timestamp: 1900000000, verifyFailure: false, programs: true, shareMismatch: false, fundingShare: false, binding: true };
@@ -58,6 +59,7 @@ function vault() {
     './swapRecordVault': { verifyAgreementApplication: async () => { calls.push('verified'); if (state.verifyFailure) throw new Error('Invalid agreement'); return { offer: { payload: offer }, acceptance: { payload: xin } }; } },
     './swapAgreementArtifact': { assertAgreementPrograms: () => { if (!state.programs) throw new Error('Wrong programs'); }, agreementSponsorAddress: () => 'sponsor' },
     './swapAgreementTransactions': transactions,
+    './swapTimingPolicy': timingPolicy,
     'leakswap-utils/dist/swapAgreement.js': {
       assertAgreementState: (_agreement, current) => { assert.equal(current.genesisHash, offer.algoGenesisHash); if (!state.binding) throw new Error('Wrong state'); },
       assertAgreementFunding: (_agreement, balance) => { if (balance !== BigInt(offer.algoAmount)) throw new Error('Unfunded'); },
@@ -73,7 +75,7 @@ function vault() {
       assert.deepEqual(args, ['xin-secret', 'xin-view', 'ali-view', 'ali-spend', 'stagenet']); return { combinedAddress: 'derived-combined' };
     } },
   });
-  return { api, state, calls };
+  return { api, state, calls, offer };
 }
 
 test('wallet derives exact target from verified agreement and funds from normal active wallet, not its negative share', async () => {
@@ -108,6 +110,16 @@ test('deposit still works when someone adds extra ALGO to the escrow', async () 
   fixture.state.balance = 5000001n;
   const target = await fixture.api.resolveLeakSwapDeposit(params, 'pin');
   assert.equal(target.binding.appId, params.appId);
+});
+
+test('deposit rejects insufficient remaining time on chain and a short signed claim window', async () => {
+  const fixture = vault();
+  fixture.state.timestamp = fixture.offer.t0 - 3599;
+  await assert.rejects(fixture.api.resolveLeakSwapDeposit(params, 'pin'), /60 minutes.*deposit deadline/);
+  fixture.state.timestamp = fixture.offer.t0 - 3600;
+  await fixture.api.resolveLeakSwapDeposit(params, 'pin');
+  fixture.offer.t1 = fixture.offer.t0 + 3599;
+  await assert.rejects(fixture.api.resolveLeakSwapDeposit(params, 'pin'), /claim window.*60 minutes/);
 });
 
 function panel() {

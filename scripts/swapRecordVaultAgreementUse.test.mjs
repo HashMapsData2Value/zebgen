@@ -12,6 +12,7 @@ import { assertAgreementState } from 'leakswap-utils/dist/swapAgreement.js';
 import { verifiedSwapSettlement } from '../lib/wallet/swapSettlement.ts';
 import { leakySign } from '../lib/wallet/leakySign.ts';
 import { ed25519 } from '@noble/curves/ed25519.js';
+import * as timingPolicy from '../lib/wallet/swapTimingPolicy.ts';
 
 const source = readFileSync(new URL('../lib/wallet/swapRecordVault.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, {
@@ -24,13 +25,13 @@ const genesisHash = new Uint8Array(32).fill(1);
 const digest = 'ab'.repeat(32);
 const ali = algosdk.generateAccount();
 const xin = algosdk.generateAccount();
-const deadline = Math.floor(Date.now() / 1000) + 3600;
+const deadline = Math.floor(Date.now() / 1000) + 7500;
 const agreement = {
   offer: {
     payload: {
       algoGenesisHash: Buffer.from(genesisHash).toString('base64'), moneroNetwork: 'regtest',
       aliAlgoAddress: ali.addr.toString(), aliPublicSpendKey: '02'.repeat(32), aliPrivateViewKey: '04'.repeat(32),
-      t0: deadline, t1: deadline + 3600, algoAmount: '10000000'
+      t0: deadline, t1: deadline + 7200, algoAmount: '10000000'
     }
   },
   acceptance: { payload: { xinAlgoAddress: xin.addr.toString(), xinPublicSpendKey: '03'.repeat(32), xinPrivateViewKey: '05'.repeat(32) } },
@@ -42,7 +43,7 @@ function deployment(fee = 1000n) {
     appID: 0n, sender: ali.addr,
     suggestedParams: { fee, minFee: 1000n, flatFee: true, firstValid: 1n, lastValid: 100n, genesisHash },
     method: algosdk.ABIMethod.fromSignature('createApplication(byte[],account,byte[],uint64,uint64)void'),
-    methodArgs: [new Uint8Array(32).fill(2), xin.addr, new Uint8Array(32).fill(3), BigInt(deadline), BigInt(deadline + 3600)],
+    methodArgs: [new Uint8Array(32).fill(2), xin.addr, new Uint8Array(32).fill(3), BigInt(deadline), BigInt(deadline + 7200)],
     approvalProgram: new Uint8Array([10]), clearProgram: new Uint8Array([10]),
     numGlobalInts: 3, numGlobalByteSlices: 4, numLocalInts: 0, numLocalByteSlices: 0, signer: async () => []
   });
@@ -62,9 +63,11 @@ function harness(locksAvailable = true) {
   const globals = [
     ['aliAlgoAddr', { bytes: ali.addr.publicKey }], ['xinAlgoAddr', { bytes: xin.addr.publicKey }],
     ['aliXternalPK', { bytes: new Uint8Array(32).fill(2) }], ['xinXternalPK', { bytes: new Uint8Array(32).fill(3) }],
-    ['t0', { uint: BigInt(deadline) }], ['t1', { uint: BigInt(deadline + 3600) }],
+    ['t0', { uint: BigInt(deadline) }], ['t1', { uint: BigInt(deadline + 7200) }],
   ].map(([key, value]) => ({ key: new TextEncoder().encode(key), value }));
   const algod = {
+    status: () => ({ do: async () => ({ lastRound: 1n }) }),
+    block: () => ({ do: async () => ({ block: { header: { timestamp: Math.floor(Date.now() / 1000) } } }) }),
     getTransactionParams: () => ({ do: async () => ({ genesisHash, genesisID: 'mock' }) }),
     getApplicationByID: () => ({ do: async () => ({ params: { globalState: globals } }) }),
     accountInformation: () => ({ do: async () => ({ amount: 0n }) }),
@@ -107,6 +110,7 @@ function harness(locksAvailable = true) {
       }
     },
     './seedVault': seedVault, './swapAgreementUse': agreementUse,
+    './swapTimingPolicy': timingPolicy,
     './swapSettlement': { verifiedSwapSettlement },
   };
   const locks = {
@@ -355,6 +359,18 @@ test('funding does not treat unavailable escrow state as an empty account', asyn
   const vault = harness();
   vault.algod.accountInformation = () => ({ do: async () => { throw new Error('algod disconnected'); } });
   await assert.rejects(vault.api.validateAgreementSigning(fundingRequest(), 'secret'), /algod disconnected/);
+});
+
+test('atomic ALGO funding enforces the chain-time boundary and fails closed on malformed time', async () => {
+  const vault = harness();
+  const request = fundingRequest();
+  let timestamp = deadline - 3600;
+  vault.algod.block = () => ({ do: async () => ({ block: { header: { timestamp } } }) });
+  await vault.api.validateAgreementSigning(request, 'secret');
+  timestamp++;
+  await assert.rejects(vault.api.validateAgreementSigning(request, 'secret'), /60 minutes.*deposit deadline/);
+  timestamp = NaN;
+  await assert.rejects(vault.api.validateAgreementSigning(request, 'secret'), /valid Unix seconds/);
 });
 
 test('completed and legacy saved swaps still list without application queries or reservation checks', async () => {

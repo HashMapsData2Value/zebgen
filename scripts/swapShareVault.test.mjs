@@ -11,6 +11,7 @@ import * as spendKeyValidation from '../lib/wallet/spendKeyValidation.ts';
 import * as handshake from 'leakswap-utils/dist/swapHandshake.js';
 import * as agreement from 'leakswap-utils/dist/swapAgreement.js';
 import * as contexts from '../lib/wallet/combinedAddressContext.ts';
+import * as timingPolicy from '../lib/wallet/swapTimingPolicy.ts';
 
 const require = createRequire(import.meta.url);
 const secret = 'test-only-password';
@@ -81,6 +82,7 @@ function harness() {
     'leakswap-utils/dist/swapAgreement.js': agreement,
     './swapKeyUse': { reserveSwapKey: async () => {} },
     './spendKeyValidation': spendKeyValidation,
+    './swapTimingPolicy': timingPolicy,
     '../monero/restoreHeight': { currentRestoreHeight: async () => 123 },
   };
   const globals = { navigator };
@@ -104,7 +106,30 @@ function harness() {
   };
 }
 
-const terms = () => ({ algoAmount: '10000000', xmrAmount: '1000000000000', t0: Math.floor(Date.now() / 1000) + 3600, t1: Math.floor(Date.now() / 1000) + 7200 });
+const terms = () => {
+  const now = Math.floor(Date.now() / 1000);
+  return { algoAmount: '10000000', xmrAmount: '1000000000000', t0: now + 7500, t1: now + 15000 };
+};
+
+test('wallet refuses unsafe new invites and authenticated counterparty offers before storing a share', async () => {
+  const vault = harness();
+  const now = Math.floor(Date.now() / 1000);
+  for (const unsafe of [{ ...terms(), t0: now + 60 }, { ...terms(), t1: terms().t0 + 60 }]) {
+    await assert.rejects(vault.api.createSwapInvite(unsafe, secret), /60 minutes/);
+  }
+  assert.equal((await vault.shares.listSwapShares(secret)).length, 0);
+  const invite = await vault.api.createSwapInvite(terms(), secret);
+  vault.select(1);
+  for (const [payload, expected] of [
+    [{ ...invite.offer.payload, t0: now + 3599 }, /60 minutes.*deposit deadline/],
+    [{ ...invite.offer.payload, t1: invite.offer.payload.t0 + 3599 }, /claim window.*60 minutes/],
+  ]) {
+    const signed = { kind: 'invite', payload, signature: Buffer.from(ed25519.sign(
+      handshake.handshakeSigningBytes('invite', payload), vault.accounts[0].sk.slice(0, 32))).toString('hex') };
+    await assert.rejects(vault.api.acceptSwapInvite(await handshake.buildHandshakeUrl('https://app.leakswap.com', signed), secret), expected);
+  }
+  assert.equal((await vault.shares.listSwapShares(secret)).length, 1);
+});
 
 test('approved invite persists encrypted fresh shares without changing normal wallets or exposing spend keys', async () => {
   const vault = harness();
@@ -196,7 +221,7 @@ test('storage failure prevents returning an invite or acceptance link', async ()
   assert.equal((await vault.shares.listSwapShares(secret)).length, 1);
 });
 
-test('legacy accepted agreements retain their normal-wallet path', async () => {
+test('agreement loading cannot access a normal wallet instead of a dedicated share', async () => {
   const vault = harness();
   const offerPayload = handshake.canonicalOffer({ ...terms(), offerId: '12'.repeat(16), createdAt: Math.floor(Date.now() / 1000),
     algoGenesisHash: Buffer.from(new Uint8Array(32).fill(9)).toString('base64'), moneroNetwork: 'regtest',
@@ -211,8 +236,9 @@ test('legacy accepted agreements retain their normal-wallet path', async () => {
   await vault.storage.set({ [`leakswapHandshake:${offerPayload.algoGenesisHash}:${offerPayload.aliAlgoAddress}:${offerPayload.offerId}:accepted`]: {
     version: 1, ciphertext: Array.from(new Uint8Array(encrypted.encryptedSeed)), salt: Array.from(encrypted.salt), iv: Array.from(encrypted.iv)
   } });
-  assert.equal(await vault.api.resolveSwapWalletId(digest, secret), 1);
-  assert.equal((await vault.api.loadAcceptedSwap(digest, secret)).offer.signature, offer.signature);
+  await assert.rejects(vault.api.resolveSwapWalletId(digest, secret), /Swap share is unavailable/);
+  await assert.rejects(vault.api.loadAcceptedSwap(digest, secret), /Swap share is unavailable/);
+  await assert.rejects(vault.api.resolveSwapWalletId(undefined, secret, 1), /agreement digest is required/);
   assert.equal((await vault.shares.listSwapShares(secret)).length, 0);
   assert.equal(vault.metaWrites, 0);
 });

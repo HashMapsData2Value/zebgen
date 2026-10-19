@@ -9,13 +9,13 @@ import { getNetworkSettings } from '../network/networkStore';
 import { verifyAlgorandGenesis } from '../network/chainIdentity';
 import { bytesToBase64 } from '../provider/base64';
 import { deriveActiveSeedAlgoAddressAtIndex, signSwapHandshake } from './algoWallet';
-import { getMoneroWalletState, unlockMoneroWallet } from './moneroVault';
 import { encryptSeed, decryptSeed } from './seedVault';
 import { reserveSwapKey } from './swapKeyUse';
 import { currentRestoreHeight } from '../monero/restoreHeight';
 import { generateMoneroKeyMaterial } from './moneroWallet';
-import { findSwapShare, storeSwapShare } from './swapShareVault';
+import { findSwapShare, storeSwapShare, unlockSwapShare } from './swapShareVault';
 import { assertUsablePublicSpendKey } from './spendKeyValidation';
+import { assertSwapFundingTime } from './swapTimingPolicy';
 
 export interface SwapInviteTerms { algoAmount: string; xmrAmount: string; t0: number; t1: number }
 
@@ -39,26 +39,15 @@ async function ownIdentity(secret: string) {
   return { settings, algoAddress, genesisHash: bytesToBase64(params.genesisHash) };
 }
 
-async function recordMaterial(owner: Awaited<ReturnType<typeof ownIdentity>>, walletId: number, secret: string) {
-  if (walletId > 0 && walletId !== (await getMoneroWalletState()).activeWalletId) throw new Error('Select the original Monero wallet for this legacy agreement.');
-  const material = await unlockMoneroWallet(secret, owner.settings.monero.networkType, walletId);
-  if (!material) throw new Error('Original swap key material is unavailable.');
-  return material;
-}
-
 export async function resolveSwapWalletId(digest: string | undefined, secret: string, walletId?: number): Promise<number> {
   if (digest) {
     await loadAcceptedSwap(digest, secret);
     const owner = await ownIdentity(secret);
-    const shareId = await findSwapShare({ digest, genesisHash: owner.genesisHash, algoAddress: owner.algoAddress, network: owner.settings.monero.network }, secret);
-    const resolved = shareId ?? (await getMoneroWalletState()).activeWalletId;
+    const resolved = await findSwapShare({ digest, genesisHash: owner.genesisHash, algoAddress: owner.algoAddress, network: owner.settings.monero.network }, secret);
     if (resolved === null || (walletId !== undefined && walletId !== resolved)) throw new Error('Swap key selection conflicts with the agreement.');
     return resolved;
   }
-  if (walletId !== undefined && walletId < 0) throw new Error('An agreement digest is required for a swap share.');
-  const resolved = walletId ?? (await getMoneroWalletState()).activeWalletId;
-  if (resolved === null) throw new Error('No Monero wallet is available.');
-  return resolved;
+  throw new Error('An agreement digest is required for a dedicated swap share.');
 }
 
 async function persist(key: string, value: unknown, secret: string) {
@@ -74,6 +63,7 @@ export async function createSwapInvite(terms: SwapInviteTerms, secret: string) {
   const owner = await ownIdentity(secret);
   const material = generateMoneroKeyMaterial(owner.settings.monero.networkType);
   const moneroRestoreHeight = await currentRestoreHeight(owner.settings.monero) ?? 0;
+  assertSwapFundingTime(terms);
   const payload = canonicalOffer({
     ...terms, offerId: Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join(''),
     moneroRestoreHeight,
@@ -104,8 +94,9 @@ export async function acceptSwapInvite(link: string, secret: string) {
     const saved = await loadAcceptedSwap(digest, secret);
     return { ...saved, link: await buildHandshakeUrl('https://app.leakswap.com', saved.acceptance) };
   }
+  assertSwapFundingTime(offer.payload);
   const walletId = await storeSwapShare({ digest, genesisHash: owner.genesisHash, algoAddress: owner.algoAddress, network: owner.settings.monero.network }, generateMoneroKeyMaterial(owner.settings.monero.networkType), secret);
-  const material = await recordMaterial(owner, walletId, secret);
+  const material = await unlockSwapShare(walletId, secret, owner.settings.monero.network);
   const payload = {
     offerDigest: digest, xinAlgoAddress: owner.algoAddress,
     xinPublicSpendKey: material.publicSpendKey, xinPrivateViewKey: material.privateViewKey
@@ -135,7 +126,7 @@ export async function confirmSwapAcceptance(link: string, secret: string) {
       if (record.version !== 1) continue;
       const offer = record.offer;
       if (await offerDigest(offer.payload) !== acceptance.payload.offerDigest) continue;
-      const material = await recordMaterial(owner, record.walletId, secret);
+      const material = await unlockSwapShare(record.walletId, secret, owner.settings.monero.network);
       await verifyHandshake(offer, algosdk.decodeAddress(owner.algoAddress).publicKey);
       if (key !== `${prefix}${offer.payload.offerId}:invite` || offer.payload.aliAlgoAddress !== owner.algoAddress
         || offer.payload.algoGenesisHash !== owner.genesisHash || offer.payload.moneroNetwork !== owner.settings.monero.network
@@ -143,6 +134,7 @@ export async function confirmSwapAcceptance(link: string, secret: string) {
         throw new Error('Saved offer no longer matches the active wallets and networks.');
       }
       if (offer.payload.t0 <= Math.floor(Date.now() / 1000)) throw new Error('This swap offer has expired.');
+      assertSwapFundingTime(offer.payload);
       await persist(`${prefix}${offer.payload.offerId}:accepted`, { version: 1, walletId: record.walletId, offer, acceptance }, secret);
       return { offer, acceptance };
     } finally { plaintext.fill(0); }
@@ -162,8 +154,8 @@ export async function loadAcceptedSwap(digest: string, secret: string): Promise<
     try {
       const record = JSON.parse(new TextDecoder().decode(plaintext)) as SwapAgreement & { version: number; walletId: number };
       if (record.version !== 1 || await offerDigest(record.offer.payload) !== digest) continue;
-      const material = await recordMaterial(owner, record.walletId, secret);
-      if (record.walletId < 0 && await findSwapShare({ digest, genesisHash: owner.genesisHash, algoAddress: owner.algoAddress, network: owner.settings.monero.network }, secret) !== record.walletId) throw new Error('Share does not match the saved agreement.');
+      const material = await unlockSwapShare(record.walletId, secret, owner.settings.monero.network);
+      if (await findSwapShare({ digest, genesisHash: owner.genesisHash, algoAddress: owner.algoAddress, network: owner.settings.monero.network }, secret) !== record.walletId) throw new Error('Share does not match the saved agreement.');
       await verifySwapAgreement(record, algosdk.decodeAddress(record.offer.payload.aliAlgoAddress).publicKey,
         algosdk.decodeAddress(record.acceptance.payload.xinAlgoAddress).publicKey);
       const ali = owner.algoAddress === record.offer.payload.aliAlgoAddress;

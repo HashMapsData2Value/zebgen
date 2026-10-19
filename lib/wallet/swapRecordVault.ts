@@ -18,6 +18,7 @@ import { listSignedTransactions, listSwapRecords, saveSignedTransactions, saveSw
 import { decryptSeed, encryptSeed } from './seedVault';
 import { reserveAgreementUse, type AgreementUse, type AgreementUseIdentity } from './swapAgreementUse';
 import { verifiedSwapSettlement } from './swapSettlement';
+import { assertSwapFundingTime } from './swapTimingPolicy';
 
 async function reserveUse(identity: AgreementUseIdentity, use: AgreementUse, secret: string): Promise<void> {
   await reserveAgreementUse({
@@ -166,6 +167,7 @@ export async function validateAgreementSigning(params: ZebgenSignAlgorandTransac
       || params.indexesToSign.length !== 1 || params.indexesToSign[0] !== 0
       || agreement.offer.payload.t0 <= Math.floor(Date.now() / 1000)) throw new Error('Invalid or expired agreement deployment.');
     assertAgreementPrograms(creates[0].applicationCall!.approvalProgram!, creates[0].applicationCall!.clearProgram!);
+    assertSwapFundingTime(agreement.offer.payload);
     await reserveUse({ genesisHash: agreement.offer.payload.algoGenesisHash, digest }, { deploymentTxId: creates[0].txID() }, secret);
     return;
   }
@@ -211,6 +213,11 @@ export async function validateAgreementSigning(params: ZebgenSignAlgorandTransac
     checkAgreementSponsorPayment(txns[1], agreement, sponsor);
     const escrow = await algod.accountInformation(algosdk.getApplicationAddress(appId)).do();
     if (escrow.amount >= BigInt(agreement.offer.payload.algoAmount)) throw new Error('Escrow is already funded. Check the chain before retrying.');
+    const status = await algod.status().do();
+    const block = await algod.block(status.lastRound).do();
+    const timestamp = Number(block.block.header.timestamp);
+    assertSwapFundingTime(agreement.offer.payload, timestamp);
+    assertSwapFundingTime(agreement.offer.payload);
   }
 }
 

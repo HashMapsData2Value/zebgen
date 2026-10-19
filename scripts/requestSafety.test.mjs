@@ -65,19 +65,18 @@ test('only transactions the wallet is asked to sign are checked, and indexes mus
   }
 });
 
-test('requests that would expose the normal Monero wallet need a saved agreement outside dev and e2e builds', () => {
+test('requests that would expose normal Monero keys require a dedicated agreement in every build', () => {
   const digest = 'ab'.repeat(32);
   for (const type of ['computeMoneroLeakySignature', 'getMoneroShareInfo', 'computeCombinedMoneroAddress', 'scanCombinedMoneroFunding']) {
-    assert.throws(() => assertAgreementBound(type, { messageHex: '00' }, false), /saved swap agreement/, type);
-    assert.throws(() => assertAgreementBound(type, { agreementDigest: 'not-a-digest' }, false), /saved swap agreement|settleLeakSwap/, type);
-    assert.throws(() => assertAgreementBound(type, null, false), /saved swap agreement/, type);
+    assert.throws(() => assertAgreementBound(type, { messageHex: '00' }), /saved swap agreement/, type);
+    assert.throws(() => assertAgreementBound(type, { agreementDigest: 'not-a-digest' }), /saved swap agreement|settleLeakSwap/, type);
+    assert.throws(() => assertAgreementBound(type, null), /saved swap agreement/, type);
     if (type === 'computeMoneroLeakySignature') {
-      for (const allowUnbound of [true, false]) assert.throws(() => assertAgreementBound(type, { agreementDigest: digest }, allowUnbound), /signatures are not exported/);
-    } else assert.doesNotThrow(() => assertAgreementBound(type, { agreementDigest: digest }, false), type);
-    assert.doesNotThrow(() => assertAgreementBound(type, { messageHex: '00' }, true), type);
+      assert.throws(() => assertAgreementBound(type, { agreementDigest: digest }), /signatures are not exported/);
+    } else assert.doesNotThrow(() => assertAgreementBound(type, { agreementDigest: digest }), type);
   }
   for (const type of ['signAlgorandTransactions', 'connect', 'listLeakSwaps']) {
-    assert.doesNotThrow(() => assertAgreementBound(type, {}, false), type);
+    assert.doesNotThrow(() => assertAgreementBound(type, {}), type);
   }
 });
 
