@@ -10,6 +10,15 @@ view-key sharing, address-combining, and combined-wallet recovery tools.
 Private spend keys and recovery phrases are hidden from the overview. Monero
 recovery details require reauthentication and are hidden when changing wallets.
 
+LeakSwap's **Encrypted swap backup** exports dedicated random shares and recovery
+records in a password-encrypted file. Keep an external copy and export again after
+swap activity; the ordinary mnemonic cannot restore those random shares. Restore
+is supported into an empty swap store and re-encrypts records with the destination
+wallet password. Normal wallet mnemonics must be backed up separately. See
+[Durable LeakSwap Records](docs/swap-persistence.md#encrypted-portable-backup).
+Legacy agreements using normal Monero wallets are refused; swap operations no
+longer fall back to normal-wallet key material, including in development builds.
+
 Receive QR codes contain only public payment URIs: `monero:<address>` for
 Monero and ARC-90 `algorand://<address>` for Algorand MainNet. Other Algorand
 networks use `algorand://net:<network>/<address>`; scanners must support that
@@ -148,7 +157,11 @@ zebgen extension (keys never leave)              any Monero node you choose
 
 - **Your keys never leave the extension.** zebgen downloads whole blocks and
   scans them locally, so the node never receives your view key (unlike "light
-  wallet" servers). Only the finished, signed transaction is sent.
+  wallet" servers). Ordinary Monero operations do not send private spend or
+  view keys. RPC requests also include output key images for spent-status
+  checks, decoy queries, and the finished signed transaction for broadcast.
+  LeakSwap settlement deliberately discloses its swap spend share to the
+  Algorand simulation node; this is separate from Monero scanning.
 - **Built from source.** zebgen-monero-wasm is compiled from Rust source by its
   build script, which also fails if the generated JavaScript ever uses `eval`.
   There's no prebuilt binary to trust, no patches, and no Web Workers.
@@ -167,10 +180,26 @@ zebgen extension (keys never leave)              any Monero node you choose
   the reference `wallet2` code. The monero-oxide project publishes a
   third-party audit in its repository, but it has far less real-world use than
   `wallet2`.
-- **Your node affects your privacy, but can't steal funds.** The node sees
-  your IP address and the transaction you broadcast. It also supplies the
-  decoy outputs mixed into your transaction; a malicious node could choose
-  them badly and weaken your privacy. Use a node you trust, ideally your own.
+- **Remote nodes learn sensitive wallet activity.** Balance scans and send
+  preparation submit the wallet's output key images together to
+  `is_key_image_spent`. A node can associate these with one client and recognize
+  corresponding spends. It also sees the client's network address, requested
+  block ranges, decoy queries and transactions submitted for relay. Private
+  keys are not sent, but this is not a metadata-private remote-node design.
+- **Prefer your own fully synchronized Monero node.** A remote node can lie
+  about height, funding, spent status and fees, withhold data or transactions,
+  and undermine privacy through the data used for decoy selection. Network
+  labels returned by RPC are not independently verified consensus proofs.
+  Local signing alone does not make remote-node data trustworthy, especially
+  when cross-chain decisions depend on it. Our hosted nodes require the same
+  trust assessment as anyone else's.
+- **Tor helps with network privacy, not node honesty.** An independently
+  operated node reached over Tor can reduce direct IP exposure, but still sees
+  the RPC data above and can return dishonest responses. Zebgen has no built-in
+  Tor or SOCKS transport: configure and verify a compatible browser/OS routing
+  setup or a local gateway separately. Pasting an onion URL into Settings does
+  not by itself establish Tor routing. Protect any gateway's RPC access and
+  credentials, and do not assume a localhost URL proves its upstream is trusted.
 - **The node may be able to tell you're using monero-oxide** from the way it
   requests data, even though the transactions themselves are built to look
   like ones from Monero's own wallet.

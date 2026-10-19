@@ -3,7 +3,37 @@
 Zebgen stores versioned, password-encrypted swap records, signing journals and
 verified settlement evidence in extension local
 storage. These survive page refresh and browser restart, but not profile deletion
-or extension removal. There is no portable export/import backup yet.
+or extension removal. The LeakSwap view provides encrypted file export and restore.
+
+## Encrypted Portable Backup
+
+Open **Encrypted swap backup** inside Zebgen's LeakSwap view. Confirm the current
+wallet password and choose a separate backup password of at least 12 characters
+to download the encrypted JSON file. AES-GCM authenticates the snapshot and its
+metadata; PBKDF2-SHA256 with 600,000 iterations derives the encryption key from
+the backup password, with a fresh salt and IV. Keep the file outside the browser
+profile and keep its password separately. Neither is sent to the dApp or a server.
+
+The snapshot includes random shares, signed handshakes, combined contexts, saved
+swaps, settlement evidence, signing journals, outgoing Monero activity and
+deposit/key-use reservations. It excludes normal wallet seeds/mnemonics, network
+settings and dApp permissions. Restore the original Algorand mnemonic separately
+and configure the matching networks to unlock the restored shares. Restore any
+normal Monero wallets separately when needed.
+
+Restore requires an empty swap store; conflicts are rejected rather than merged
+or overwritten. Authenticate with the backup password and confirm the destination
+wallet password. All records are authenticated before writing and encrypted again
+under the destination wallet password. Format version, record namespaces, duplicate
+entries and size limits are checked. Existing runtime readers still validate the
+individual records when using them. Do not restore during pending swap approvals.
+
+This is a manual point-in-time snapshot, not automatic synchronization. Export
+again after creating/accepting swaps, funding or settlement. A stale backup may
+lack later deposits or key-use reservations; reconcile chain state and outgoing
+activity before resuming, and never infer that a missing record authorizes a new
+deposit or reuse of an old share. Restore never submits transactions. Without a
+usable backup, the normal mnemonic cannot recreate random shares lost with a profile.
 
 ## Swap Identity
 
@@ -122,8 +152,8 @@ confirmation observation; this is not an independently verified consensus proof.
 Before the first successful lookup, an unavailable indexer or pruned history still
 requires a settlement reference and a node that serves it. Capturing evidence is not
 a background watchtower while Zebgen is locked or the browser is closed. Profile loss
-remains unrecoverable without an external wallet/context backup, which is not yet
-implemented. Do not clear browser storage or reinstall the extension when investigating
+remains unrecoverable without a previously exported encrypted swap backup and the
+original Algorand identity. Do not clear browser storage or reinstall the extension when investigating
 an incomplete swap.
 
 ## Authenticated Handshakes
@@ -157,8 +187,8 @@ Creating or accepting a link authenticates terms; it does not transfer funds.
 Explicitly approved `createSwapInvite` and `acceptSwapInvite` operations generate
 fresh Monero key material and encrypt it in a separate `leakswapShare:` vault
 before returning signed links. Acceptance retries reuse the exact saved share,
-including after restart or concurrent requests. Existing legacy acceptances are
-returned without replacing their keys. Each share binds the offer digest, exact
+including after restart or concurrent requests. Handshakes access the dedicated
+share vault directly, without normal-wallet compatibility code. Each share binds the offer digest, exact
 Algorand genesis hash and derived account identity, and Monero network (including
 the mainnet/regtest distinction).
 
@@ -166,21 +196,21 @@ Shares have negative context IDs, separate from positive normal-wallet database
 IDs. Unlocking a share verifies its identity and networks without changing normal
 wallet metadata. They appear only in LeakSwap's key-share inventory, with no
 receive address, send controls or generic payment capability. They are not normal
-funding wallets. Existing wallets, contexts and legacy agreements are retained.
+funding wallets.
 
 The provider's share-info, combined-address, scan and leaky-signature requests
 carry `agreementDigest`; the wallet resolves the encrypted accepted record and
 its own share, never a global selected-share pointer. Combined operations enforce
 the signed counterparty keys. Leaky signing also requires `agreementAppId` and
 verifies the application and exact message address. Saving, listing, readiness
-checks and context-bound recovery use the same share identity. Legacy agreements
-continue to use their original selected normal wallet.
+checks and context-bound recovery use the same share identity. Agreement resolution
+requires a dedicated negative-ID share and never falls back to the normal wallet.
 
 Raw private spend keys are not returned in the inventory or sent to the page.
 Leaky signatures nevertheless reveal those keys, as described below. Like existing
 encrypted records, shares survive restarts but not profile deletion or extension
-removal. Portable backup/export is not implemented. No storage reset or migration
-is performed.
+removal unless an encrypted portable backup has been exported. No storage reset
+or automatic migration is performed.
 
 ## Agreement-Bound Execution
 
@@ -199,6 +229,26 @@ Atomic funding must pay exactly the agreed ALGO amount plus the expected sponsor
 reserve. An already fully funded escrow blocks retries; unsolicited dust or a
 partial balance does not block funding. Deposit and settlement checks require
 at least the agreed escrow amount.
+
+### Wallet Timing Policy
+
+New invitation signing, acceptance and acceptance confirmation require at least
+60 minutes remaining before `t0`, and at least 60 minutes between `t0` and
+`t1`. Agreement-bound deployment and atomic ALGO funding apply the same policy.
+XMR deposit resolution checks both the local clock and the latest Algorand block
+timestamp; atomic ALGO funding also checks both clocks. XMR deposit resolution
+runs again before relay, so a previously prepared payment cannot bypass the
+remaining-time requirement. Malformed timestamps fail closed.
+
+These are wallet policy floors, not confirmation or finality guarantees. They
+apply on all networks, including Localnet/Regtest. The page's caution threshold
+remains 120 minutes. The page's Fast preset leaves about 65 minutes for acceptance,
+deployment, funding and deposit initiation before the one-hour remaining-time
+guard blocks new commitments; use a longer
+preset if necessary. Funds already committed must still be recoverable: listing,
+recovery, Set Ready and existing claim/refund paths are not blocked by this new
+funding policy. Generic Monero sends are not agreement-bound and cannot enforce
+swap deadlines. Contract deadline rules and existing signed terms are unchanged.
 
 ### Wallet-Owned Settlement And Disclosure
 
@@ -229,11 +279,10 @@ nodes remain risks. Submission/confirmation failures report an uncertain result
 with a transaction reference, not a claim that disclosure was rolled back.
 The encrypted journal supports later reconciliation; it is not automatic retry.
 
-Unbound development/e2e manual swaps retain the old signature-export API. They
-do not receive the accepted-agreement protections above. Legacy accepted
-agreements use the wallet-owned path but may still disclose their original
-normal-wallet spend key rather than a dedicated share; the approval warning
-therefore applies to the selected swap key, not necessarily a disposable key.
+Unbound provider share requests are refused in every build, including development
+and e2e. Revealing signatures cannot be exported through the provider. Legacy
+accepted agreements that reference ordinary Monero wallets are refused rather
+than disclosing those wallets' spend keys.
 
 Tests in `scripts/settleLeakSwap.test.mjs` cover local rejection before signature
 generation, simulation rejection/errors, cancellation, storage failure, receipt
@@ -258,8 +307,9 @@ the page's claim/refund buttons, and does not prove a full browser Monero swap.
 The saved swap binds the app ID to the digest. Later signing requests referencing
 that app or escrow infer the binding even when the page omits the digest. The
 agreement is restored with saved swaps after reload, including after app deletion.
-Legacy/manual swaps without a binding retain their existing behavior; there is
-no blanket rule treating every generic transaction as a LeakSwap agreement.
+Generic transaction signing remains available, but swap share access and
+agreement resolution require a dedicated share. Legacy normal-wallet agreements
+are unsupported, including in development builds.
 
 Xin's first save checks the escrow amount. Set Ready and claim signing recheck
 it. New offers include a wallet-captured `moneroRestoreHeight`: the configured
@@ -334,7 +384,13 @@ Other wallets remain supported through the displayed address and copy control.
 - Private browser `npm run test:zebgen`: both parties reload/resume before the
   Monero deposit, followed by a real sponsored claim and recovered-wallet sweep.
 
-Missing certification: fresh-profile backup restoration, interrupted signing,
+Portable backup tests cover authenticated export/import, rejection of tampered
+files and conflicting stores, destination-password re-encryption, and restoration
+of a real accepted agreement's original random share in an isolated test store.
+Rendered backup controls are checked at mobile and desktop widths. These tests
+do not certify a complete fresh-profile on-chain recovery and sweep.
+
+Missing certification: full fresh-profile recovery and sweep, interrupted signing,
 concurrent approvals, deployment response loss, counterparty history discovery,
 and browser storage quota exhaustion. Journal retention/pruning is not yet added;
 quota errors fail signing rather than silently dropping recovery references.
