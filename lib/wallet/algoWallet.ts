@@ -11,6 +11,7 @@ import {
   getSeedRecord,
   getWalletMeta,
   setWalletMeta,
+  saveDerivedAlgoAddress,
   type WalletMeta,
 } from './db';
 import { constantTimeEqual, decryptSeed, deriveLockVerifier, encryptSeed } from './seedVault';
@@ -24,6 +25,28 @@ export interface SignedInState {
 }
 
 export const ALGO_DERIVATION_PATH_PREFIX = "m/44'/283'/0'/0";
+
+export async function listAlgoWallets() {
+  const [records, meta] = await Promise.all([getAllSeedRecords(), getWalletMeta()]);
+  return {
+    activeSeedId: meta?.activeSeedId ?? null,
+    wallets: records.filter(record => record.id !== undefined).map(record => ({
+      id: record.id!, address: record.algoAddress,
+      addresses: { '0': record.algoAddress, ...record.derivedAddresses },
+    })),
+  };
+}
+
+export async function selectAlgoWallet(seedId: number, lockSecret: string) {
+  const meta = await getWalletMeta();
+  if (!meta?.lockSalt || !meta.lockVerifier || !await verifyWalletLock(lockSecret, meta.lockSalt, meta.lockVerifier)) {
+    throw new Error('Invalid wallet password or PIN.');
+  }
+  const record = await getSeedRecord(seedId);
+  if (!record) throw new Error('Algorand wallet not found.');
+  await setWalletMeta({ ...meta, activeSeedId: seedId, algoAddress: record.algoAddress });
+  return record.algoAddress;
+}
 
 const EMPTY_META: WalletMeta = {
   activeSeedId: null,
@@ -145,8 +168,8 @@ export async function getWalletLockState(): Promise<{ isConfigured: boolean }> {
 }
 
 export async function createWalletLock(lockSecret: string): Promise<void> {
-  if (lockSecret.trim().length < 4) {
-    throw new Error('Use at least 4 characters for your password or PIN.');
+  if (lockSecret.trim().length < 8) {
+    throw new Error('Use at least 8 characters for your password or PIN.');
   }
 
   const meta = (await getWalletMeta()) ?? EMPTY_META;
@@ -217,6 +240,8 @@ export async function deriveActiveSeedAlgoAddressAtIndex(
     const publicKey = await xhd.keyGen(rootKey, KeyContext.Address, 0, addressIndex);
     const algoAddress = new algosdk.Address(publicKey).toString();
     rootKey.fill(0);
+
+    await saveDerivedAlgoAddress(meta.activeSeedId, addressIndex, algoAddress);
 
     return {
       algoAddress,

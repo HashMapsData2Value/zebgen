@@ -10,6 +10,7 @@ export interface SeedRecord {
   mnemonicIv?: Uint8Array;
   algoAddress: string;
   createdAt: string;
+  derivedAddresses?: Record<string, string>;
 }
 
 export interface MoneroKeyRecord {
@@ -74,6 +75,15 @@ export async function getSeedRecord(seedId: number): Promise<SeedRecord | undefi
 
 export async function getAllSeedRecords(): Promise<SeedRecord[]> {
   return (await dbPromise).getAll('seeds');
+}
+
+export async function saveDerivedAlgoAddress(seedId: number, index: number, address: string): Promise<void> {
+  const transaction = (await dbPromise).transaction('seeds', 'readwrite');
+  const record = await transaction.store.get(seedId);
+  if (!record) throw new Error('Algorand wallet not found.');
+  record.derivedAddresses = { ...record.derivedAddresses, [index]: address };
+  await transaction.store.put(record);
+  await transaction.done;
 }
 
 export async function addMoneroKeyRecord(record: MoneroKeyRecord): Promise<number> {

@@ -28,17 +28,24 @@ function fixture() {
   return { state, api };
 }
 
-test('choosing existing wallets activates the selected pair and preserves wallet lock metadata', async () => {
+test('only the active Algorand mnemonic is offered, while the Monero wallet can still be chosen', async () => {
   const { api, state } = fixture();
-  assert.equal((await api.connectionChoices()).algo.length, 2);
-  await api.activateConnectionSelection({ algoAddress: 'ALGO_TWO', moneroAddress: 'XMR_TWO', moneroWalletId: 2 });
-  assert.equal(state.meta.activeSeedId, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify((await api.connectionChoices()).algo)), [{ id: 1, address: 'ALGO_ONE' }]);
+  await api.activateConnectionSelection({ algoAddress: 'ALGO_ONE', moneroAddress: 'XMR_TWO', moneroWalletId: 2 });
+  assert.equal(state.meta.activeSeedId, 1);
   assert.equal(state.meta.activeMoneroKeyId, 2);
-  assert.equal(state.meta.algoAddress, 'ALGO_TWO');
+  assert.equal(state.meta.algoAddress, 'ALGO_ONE');
   assert.equal(state.meta.moneroAddress, 'XMR_TWO');
   assert.equal(state.meta.lockSalt, 'keep-salt');
   assert.equal(state.meta.lockVerifier, 'keep-verifier');
   assert.equal(state.writes, 1);
+});
+
+test('a connection cannot switch to an inactive Algorand mnemonic', async () => {
+  const { api, state } = fixture();
+  await assert.rejects(api.activateConnectionSelection({ algoAddress: 'ALGO_TWO', moneroAddress: 'XMR_ONE', moneroWalletId: 1 }), /no longer available/);
+  assert.equal(state.writes, 0);
+  assert.equal(state.meta.activeSeedId, 1);
 });
 
 test('fabricated addresses, mismatched wallet IDs and missing selections fail without changing active wallets', async () => {

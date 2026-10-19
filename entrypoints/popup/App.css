@@ -18,7 +18,8 @@
 .swap-pair { display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 1rem 0; }
 .swap-pair img { width: 24px; height: 24px; object-fit: contain; }
 .swap-pair svg { flex-shrink: 0; color: #8bd6b2; }
-.leakswap-view .new-swap { display: flex; align-items: center; justify-content: center; gap: 0.5rem; border: 1px solid #527a68; border-radius: 6px; background: #19372b; color: #d8f8e8; padding: 0.65rem; text-decoration: none; }
+.leakswap-view .new-swap { display: flex; align-items: center; justify-content: center; gap: 0.5rem; border: 2px dashed #d42727; border-radius: 6px; background: transparent; color: #fff; padding: 0.65rem; text-decoration: none; }
+.leakswap-view .new-swap:hover, .leakswap-view .new-swap:focus-visible { background: #d42727; color: #fff; }
 .swap-list-heading, .swap-row-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
 .swap-list-heading { margin-top: 1.25rem; }
 .swap-list-heading h3, .swap-row-heading h4 { margin: 0; }

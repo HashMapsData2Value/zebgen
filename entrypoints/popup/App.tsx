@@ -15,6 +15,8 @@ import {
   getSignedInState,
   getWalletLockState,
   importAlgoMnemonic,
+  listAlgoWallets,
+  selectAlgoWallet,
   unlockWallet,
 } from '../../lib/wallet/algoWallet';
 import {
@@ -59,6 +61,9 @@ import MoneroRecovery from './MoneroRecovery';
 import Receive from './Receive';
 import CopyValue from './CopyValue';
 import { discardTransactionsViaBackground } from '../../lib/network/messages';
+import { getAlgoBalance } from '../../lib/algorand/algodClient';
+
+const IDLE_LOCK_MS = 10 * 60 * 1000;
 
 interface AppProps {
   variant?: 'popup' | 'full';
@@ -87,7 +92,7 @@ function App({ variant = 'popup' }: AppProps) {
   const [isSettingLock, setIsSettingLock] = useState(false);
   const [isUnlocking, setIsUnlocking] = useState(false);
   const [isDerivingAddress, setIsDerivingAddress] = useState(false);
-  const [algorandView, setAlgorandView] = useState<'wallet' | 'transaction' | 'receive' | 'settings'>('wallet');
+  const [algorandView, setAlgorandView] = useState<'wallet' | 'add' | 'transaction' | 'receive' | 'settings'>('wallet');
   const [moneroWallets, setMoneroWallets] = useState<MoneroWalletSummary[]>([]);
   const [activeMoneroWalletId, setActiveMoneroWalletId] = useState<number | null>(null);
   const [moneroMaterial, setMoneroMaterial] = useState<MoneroKeyMaterial | null>(null);
@@ -108,6 +113,38 @@ function App({ variant = 'popup' }: AppProps) {
   const [combinedAddressFromPriv, setCombinedAddressFromPriv] = useState('');
   const [combinedAddressFromPublic, setCombinedAddressFromPublic] = useState('');
   const [networkSettings, setNetworkSettings] = useState<NetworkSettings | null>(null);
+  const [algoWallets, setAlgoWallets] = useState<Awaited<ReturnType<typeof listAlgoWallets>>['wallets']>([]);
+  const [activeAlgoSeedId, setActiveAlgoSeedId] = useState<number | null>(null);
+  const [algoBalances, setAlgoBalances] = useState<Record<string, string>>({});
+
+  async function refreshAlgoInventory() {
+    const inventory = await listAlgoWallets();
+    setAlgoWallets(inventory.wallets);
+    setActiveAlgoSeedId(inventory.activeSeedId);
+    const wallet = inventory.wallets.find(item => item.id === inventory.activeSeedId);
+    setLastAddressIndex(wallet ? Math.max(...Object.keys(wallet.addresses).map(Number)) : 0);
+  }
+
+  useEffect(() => {
+    void refreshAlgoInventory().catch(failure => console.error('Unable to load Algorand wallets', failure));
+  }, []);
+
+  useEffect(() => {
+    if (!isUnlocked || !networkSettings || selectedWalletType !== 'algorand') return;
+    let active = true;
+    const wallet = algoWallets.find(item => item.id === activeAlgoSeedId);
+    setAlgoBalances({});
+    async function refresh() {
+      for (const address of Object.values(wallet?.addresses ?? {})) {
+        if (!active) return;
+        const result = await getAlgoBalance(networkSettings!.algorand.algod, address, networkSettings!.algorand.network);
+        if (active) setAlgoBalances(values => ({ ...values, [address]: result.ok && result.algos !== undefined
+          ? `${result.algos.toLocaleString(undefined, { maximumFractionDigits: 6 })} ALGO` : 'Unavailable' }));
+      }
+    }
+    void refresh().catch(failure => console.error('Unable to load account balances', failure));
+    return () => { active = false; };
+  }, [activeAlgoSeedId, algoWallets, isUnlocked, networkSettings, selectedWalletType]);
 
   useEffect(() => {
     let active = true;
@@ -292,6 +329,8 @@ function App({ variant = 'popup' }: AppProps) {
       setMnemonic('');
       setGeneratedMnemonic('');
       setMnemonicMode(null);
+      setAlgorandView('wallet');
+      await refreshAlgoInventory();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to import mnemonic.');
     } finally {
@@ -353,6 +392,19 @@ function App({ variant = 'popup' }: AppProps) {
     setMoneroMaterial(null);
     setRecoveredMaterial(null);
   }
+
+  // The full-tab dashboard otherwise keeps the password in memory until it is closed.
+  useEffect(() => {
+    if (!isUnlocked) return;
+    let timer = window.setTimeout(onLockWallet, IDLE_LOCK_MS);
+    const restart = () => { window.clearTimeout(timer); timer = window.setTimeout(onLockWallet, IDLE_LOCK_MS); };
+    const events = ['pointerdown', 'keydown', 'touchstart'] as const;
+    events.forEach((name) => window.addEventListener(name, restart));
+    return () => {
+      window.clearTimeout(timer);
+      events.forEach((name) => window.removeEventListener(name, restart));
+    };
+  }, [isUnlocked]);
 
   async function onSelectMonero() {
     setError(null);
@@ -553,6 +605,9 @@ function App({ variant = 'popup' }: AppProps) {
       return;
     }
     if (selectedWalletType === 'algorand' && algorandView !== 'wallet') {
+      setMnemonicMode(null);
+      setMnemonic('');
+      setGeneratedMnemonic('');
       setAlgorandView('wallet');
       return;
     }
@@ -599,6 +654,7 @@ function App({ variant = 'popup' }: AppProps) {
       setAlgoAddress(derived.algoAddress);
       setAddressIndex(derived.addressIndex);
       setLastAddressIndex((current) => Math.max(current, derived.addressIndex));
+      await refreshAlgoInventory();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to derive address at index.');
     } finally {
@@ -684,12 +740,31 @@ function App({ variant = 'popup' }: AppProps) {
         </div>
       ) : null}
 
-      {isUnlocked && selectedWalletType === 'algorand' && isSignedIn ? (
-        <div className="account-selector"><label htmlFor="algorand-address-selector">Account</label>
+      {isUnlocked && selectedWalletType === 'algorand' && isSignedIn && algorandView !== 'add' ? (
+        <div>
+        <div className="account-selector"><label htmlFor="algorand-wallet-selector">Wallet</label>
+          <select id="algorand-wallet-selector" value={activeAlgoSeedId ?? ''} disabled={isDerivingAddress}
+            onChange={async event => {
+              if (!sessionLockSecret) return;
+              setIsDerivingAddress(true); setError(null);
+              try {
+                const address = await selectAlgoWallet(Number(event.target.value), sessionLockSecret);
+                setAlgoAddress(address); setAddressIndex(0); setAlgorandView('wallet');
+                await refreshAlgoInventory();
+              } catch (failure) { setError(failure instanceof Error ? failure.message : 'Unable to select wallet.'); }
+              finally { setIsDerivingAddress(false); }
+            }}>
+            {algoWallets.map((wallet, index) => <option key={wallet.id} value={wallet.id}>Wallet {index + 1} · {wallet.address.slice(0, 6)}...{wallet.address.slice(-6)}</option>)}
+          </select>
+        </div>
+        <div className="account-selector"><label htmlFor="algorand-address-selector">Address</label>
           <select id="algorand-address-selector" value={addressIndex} disabled={isDerivingAddress}
             onChange={(event) => onSelectAddressIndex(Number(event.target.value))}>
-            {Array.from({ length: lastAddressIndex + 1 }, (_, index) => <option key={index} value={index}>Address {index + 1}</option>)}
+            {Object.entries(algoWallets.find(wallet => wallet.id === activeAlgoSeedId)?.addresses ?? {}).map(([index, address]) => <option key={index} value={index}>
+              {Number(index) + 1} · {address.slice(0, 4)}...{address.slice(-4)} · {algoBalances[address] ?? 'Loading...'}
+            </option>)}
           </select>
+        </div>
         </div>
       ) : null}
 
@@ -783,6 +858,7 @@ function App({ variant = 'popup' }: AppProps) {
           </div>
           <div className="wallet-action-grid">
             <button className="secondary" type="button" disabled={isDerivingAddress} onClick={() => onSelectAddressIndex(lastAddressIndex + 1)}><Plus size={18} />{isDerivingAddress ? 'Adding Address...' : 'Add Address'}</button>
+            <button className="secondary" type="button" disabled={isDerivingAddress} onClick={() => { setMnemonicMode(null); setMnemonic(''); setGeneratedMnemonic(''); setAlgorandView('add'); }}><Plus size={18} />Add wallet</button>
           </div>
         </section>
       ) : null}
@@ -826,7 +902,7 @@ function App({ variant = 'popup' }: AppProps) {
         isLockConfigured &&
         isUnlocked &&
         selectedWalletType === 'algorand' &&
-        !isSignedIn && algorandView === 'wallet' ? (
+        ((!isSignedIn && algorandView === 'wallet') || algorandView === 'add') ? (
         <section className="card">
           <h2 className="chain-title">
             <img className="chain-logo" src={algorandLogo} alt="" />
