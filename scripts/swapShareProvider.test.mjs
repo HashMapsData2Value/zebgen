@@ -7,6 +7,7 @@ import ts from 'typescript';
 import algosdk from 'algosdk';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import * as validation from '../lib/provider/fundingValidation.ts';
+import * as requestSafety from '../lib/provider/requestSafety.ts';
 
 const require = createRequire(import.meta.url);
 function compile(source, modules) {
@@ -43,6 +44,7 @@ function harness() {
     '../../lib/monero/restoreHeight': { currentRestoreHeight: async () => 100, swapAddressHeight: async () => undefined, rememberSwapAddressHeight: async () => {} },
     '../../lib/monero/moneroDaemon': { scanMoneroFunding: async (_network, spend, view, height) => { scans.push({ spend, view, height }); return { matureAtomic: '10', spentStatusKnown: false }; } },
     '../../lib/provider/fundingValidation': validation,
+    '../../lib/provider/requestSafety': requestSafety,
     '../../lib/network/networkStore': { getNetworkSettings: async () => ({ monero: { network: 'regtest', networkType: 0 } }) },
     '../../lib/provider/base64': {},
     '../../lib/provider/transactionPreview': {},
@@ -57,6 +59,11 @@ function harness() {
     'leakswap-utils/dist/swapHandshake.js': {},
     './SwapFeeDisclosure': {}, './ConnectDisclosure': {}, './LeakSwapDeposit': {},
     '../../lib/wallet/leakSwapDeposit': {},
+    '../../lib/wallet/settleLeakSwap': { settleLeakSwap: async (params, secret, origin) => {
+      assert.deepEqual(params, { agreementDigest: digest, appId: '123', action: 'claim' });
+      assert.equal(secret, 'synthetic-password'); assert.equal(origin, 'https://app.leakswap.com');
+      return { txId: 'receipt-only', confirmedRound: '42' };
+    } },
     '../../lib/wallet/recoverLeakSwap': {},
     '../../lib/provider/connectionApproval': { assertConnectionAccounts: async () => {} },
     '../../lib/provider/connectionSelection': {},
@@ -69,7 +76,7 @@ function harness() {
     invoke: (type, params) => api.computeResult({ type, params, origin: 'https://app.leakswap.com' }, 'synthetic-password') };
 }
 
-test('share provider info, combined address, scan and leaky signature all use the explicit agreement share', async () => {
+test('share provider uses the explicit agreement share and delegates settlement without exporting a signature', async () => {
   const vault = harness();
   const params = { agreementDigest: digest, counterpartyPublicSpendKey: vault.counterparty.publicSpendKey,
     counterpartyPrivateViewKey: vault.counterparty.privateViewKey };
@@ -82,10 +89,9 @@ test('share provider info, combined address, scan and leaky signature all use th
   assert.equal(scan.combinedAddress, combined.combinedAddress);
   assert.equal(vault.scans[0].view, monero.combinePrivateSpendKeys(vault.material.privateViewKey, vault.counterparty.privateViewKey));
   assert.equal(vault.scans[0].height, 100);
-  const message = algosdk.decodeAddress(algosdk.getApplicationAddress(123n).toString()).publicKey;
-  const result = await vault.invoke('computeMoneroLeakySignature', { agreementDigest: digest, agreementAppId: '123', messageHex: bytesToHex(message) });
-  assert.equal(result.signatureHex, bytesToHex(signing.leakySign(message, new Uint8Array(Buffer.from(vault.material.privateSpendKey, 'hex')))));
-  assert.equal(vault.unlocked.length, 4);
+  const result = await vault.invoke('settleLeakSwap', { agreementDigest: digest, appId: '123', action: 'claim' });
+  assert.deepEqual(result, { txId: 'receipt-only', confirmedRound: '42' });
+  assert.equal(vault.unlocked.length, 3);
   assert.ok(!JSON.stringify([info, combined, scan, result]).includes(vault.material.privateSpendKey));
 });
 
@@ -96,7 +102,7 @@ test('share provider rejects substituted counterparty keys and arbitrary leaky m
     await assert.rejects(vault.invoke(type, { agreementDigest: digest, counterpartyPublicSpendKey: other.publicSpendKey,
       counterpartyPrivateViewKey: vault.counterparty.privateViewKey }), /Counterparty keys do not match/);
   }
-  await assert.rejects(vault.invoke('computeMoneroLeakySignature', { agreementDigest: digest, messageHex: '00'.repeat(32) }), /application ID is required/);
-  await assert.rejects(vault.invoke('computeMoneroLeakySignature', { agreementDigest: digest, agreementAppId: '123', messageHex: '00'.repeat(32) }), /message does not match/);
+  await assert.rejects(vault.invoke('computeMoneroLeakySignature', { agreementDigest: digest, messageHex: '00'.repeat(32) }), /signatures are not exported/);
+  await assert.rejects(vault.invoke('computeMoneroLeakySignature', { agreementDigest: digest, agreementAppId: '123', messageHex: '00'.repeat(32) }), /signatures are not exported/);
   assert.equal(vault.unlocked.length, 0);
 });

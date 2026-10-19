@@ -9,9 +9,10 @@ import { deriveActiveSeedAlgoAddressAtIndex } from './algoWallet';
 import { getMoneroWalletState, unlockMoneroWallet } from './moneroVault';
 import { resolveSwapWalletId } from './swapHandshakeVault';
 import { verifyAgreementApplication } from './swapRecordVault';
-import { assertAgreementPrograms } from './swapAgreementArtifact';
+import { assertAgreementPrograms, agreementSponsorAddress } from './swapAgreementArtifact';
+import { SPONSOR_FUNDING_MICROALGOS } from './swapAgreementTransactions';
 import { computeCombinedAddressWithPrivateAndPublic } from './moneroWallet';
-import { assertAgreementFunding, assertAgreementState } from 'leakswap-utils/dist/swapAgreement.js';
+import { assertAgreementState } from 'leakswap-utils/dist/swapAgreement.js';
 
 export async function resolveLeakSwapDeposit(params: ZebgenDepositLeakSwapMoneroParams, secret: string) {
   validateProviderRequest('depositLeakSwapMonero', params);
@@ -47,7 +48,11 @@ export async function resolveLeakSwapDeposit(params: ZebgenDepositLeakSwapMonero
     throw new Error('The deposit deadline has passed.');
   }
   const escrow = await algod.accountInformation(algosdk.getApplicationAddress(BigInt(params.appId))).do();
-  assertAgreementFunding(agreement, escrow.amount);
+  // Anyone can add ALGO to the escrow, so extra dust must not block the deposit; only a shortfall does.
+  if (escrow.amount < BigInt(agreement.offer.payload.algoAmount)) throw new Error('ALGO funding is below the authenticated amount.');
+  // Without sponsor funds a zero-ALGO Xin cannot pay the claim's fees, so check before any XMR is locked.
+  const sponsor = await algod.accountInformation(agreementSponsorAddress(BigInt(params.appId), agreement)).do();
+  if (sponsor.amount < SPONSOR_FUNDING_MICROALGOS) throw new Error('The fee sponsor account is not fully funded. Do not deposit; ask Ali to fund the swap.');
   const shareId = await resolveSwapWalletId(params.agreementDigest, secret);
   if (shareId === null) throw new Error('Saved swap share is unavailable.');
   const share = await unlockMoneroWallet(secret, settings.monero.networkType, shareId);

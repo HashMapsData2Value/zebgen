@@ -16,6 +16,7 @@ function load(path, dependencies = {}, globals = {}) {
   return api;
 }
 const validation = load('../lib/provider/fundingValidation.ts');
+const transactions = { SPONSOR_FUNDING_MICROALGOS: 209000n };
 const params = { agreementDigest: 'ab'.repeat(32), appId: '42' };
 
 test('deposit payload accepts only an authenticated identity, never page-selected payment fields', () => {
@@ -31,7 +32,7 @@ function vault() {
   const offer = { algoAmount: '5000000', xmrAmount: '100000000001', t0: 2000000000, t1: 2000001000,
     algoGenesisHash: 'genesis', moneroNetwork: 'regtest', aliAlgoAddress: 'ali', aliPublicSpendKey: 'ali-spend', aliPrivateViewKey: 'ali-view' };
   const xin = { xinAlgoAddress: 'xin', xinPublicSpendKey: 'xin-spend', xinPrivateViewKey: 'xin-view' };
-  const state = { role: 'xin', walletId: 7, ready: 0n, balance: 5000000n, timestamp: 1900000000, verifyFailure: false, programs: true, shareMismatch: false, fundingShare: false, binding: true };
+  const state = { role: 'xin', walletId: 7, ready: 0n, balance: 5000000n, sponsorBalance: 209000n, timestamp: 1900000000, verifyFailure: false, programs: true, shareMismatch: false, fundingShare: false, binding: true };
   const calls = [];
   const material = { publicSpendKey: 'xin-spend', privateSpendKey: 'xin-secret', privateViewKey: 'xin-view', address: 'share' };
   class Algodv2 {
@@ -42,7 +43,7 @@ function vault() {
       ...Object.entries({ t0: offer.t0, t1: offer.t1, aliReady: state.ready })
         .map(([key, uint]) => ({ key: new TextEncoder().encode(key), value: { uint } })),
     ] } }) }; }
-    accountInformation() { return { do: async () => ({ amount: state.balance }) }; }
+    accountInformation(address) { return { do: async () => ({ amount: address === 'sponsor' ? state.sponsorBalance : state.balance }) }; }
     status() { return { do: async () => ({ lastRound: 100n }) }; }
     block() { return { do: async () => ({ block: { header: { timestamp: state.timestamp } } }) }; }
   }
@@ -55,7 +56,8 @@ function vault() {
     '../provider/fundingValidation': validation,
     './algoWallet': { deriveActiveSeedAlgoAddressAtIndex: async () => ({ algoAddress: state.role }) },
     './swapRecordVault': { verifyAgreementApplication: async () => { calls.push('verified'); if (state.verifyFailure) throw new Error('Invalid agreement'); return { offer: { payload: offer }, acceptance: { payload: xin } }; } },
-    './swapAgreementArtifact': { assertAgreementPrograms: () => { if (!state.programs) throw new Error('Wrong programs'); } },
+    './swapAgreementArtifact': { assertAgreementPrograms: () => { if (!state.programs) throw new Error('Wrong programs'); }, agreementSponsorAddress: () => 'sponsor' },
+    './swapAgreementTransactions': transactions,
     'leakswap-utils/dist/swapAgreement.js': {
       assertAgreementState: (_agreement, current) => { assert.equal(current.genesisHash, offer.algoGenesisHash); if (!state.binding) throw new Error('Wrong state'); },
       assertAgreementFunding: (_agreement, balance) => { if (balance !== BigInt(offer.algoAmount)) throw new Error('Unfunded'); },
@@ -92,13 +94,20 @@ test('wallet derives exact target from verified agreement and funds from normal 
 
 for (const [name, change] of [
   ['Ali role', { role: 'ali' }], ['unverified agreement', { verifyFailure: true }], ['wrong program', { programs: false }],
-  ['wrong contract state', { binding: false }], ['unfunded contract', { balance: 0n }], ['overfunded contract', { balance: 5000001n }],
+  ['wrong contract state', { binding: false }], ['unfunded contract', { balance: 0n }], ['unfunded fee sponsor', { sponsorBalance: 0n }], ['partly funded fee sponsor', { sponsorBalance: 208999n }],
   ['already ready', { ready: 1n }], ['expired deadline', { timestamp: 2000000000 }], ['negative funding share', { walletId: -2 }],
   ['wrong saved share', { shareMismatch: true }], ['legacy share as funding', { fundingShare: true }],
 ]) test(`deposit refuses ${name}`, async () => {
   const fixture = vault();
   Object.assign(fixture.state, change);
   await assert.rejects(fixture.api.resolveLeakSwapDeposit(params, 'pin'));
+});
+
+test('deposit still works when someone adds extra ALGO to the escrow', async () => {
+  const fixture = vault();
+  fixture.state.balance = 5000001n;
+  const target = await fixture.api.resolveLeakSwapDeposit(params, 'pin');
+  assert.equal(target.binding.appId, params.appId);
 });
 
 function panel() {

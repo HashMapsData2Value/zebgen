@@ -2,6 +2,7 @@ import { browser } from 'wxt/browser';
 
 import { PROVIDER_PAGE_MATCHES } from '../lib/provider/pageMatches';
 import { validateProviderRequest } from '../lib/provider/fundingValidation';
+import { isValidRequestId } from '../lib/provider/requestSafety';
 import type {
   ZebgenBackgroundRequest,
   ZebgenBackgroundResponse,
@@ -21,7 +22,7 @@ export default defineContentScript({
         return;
       }
       const data = event.data as ZebgenPageRequest | undefined;
-      if (!data || data.source !== 'zebgen-page') {
+      if (!data || data.source !== 'zebgen-page' || !isValidRequestId(data.id)) {
         return;
       }
 

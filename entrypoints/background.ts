@@ -6,6 +6,7 @@ import { approveOrigin, isOriginApproved } from '../lib/provider/originApproval'
 import { approveConnection, assertConnectionAccounts, connectedAccounts, publicConnectionAccounts, type ConnectionAccounts } from '../lib/provider/connectionApproval';
 import { activateConnectionSelection } from '../lib/provider/connectionSelection';
 import { validateProviderRequest } from '../lib/provider/fundingValidation';
+import { assertAgreementBound, assertProviderSender, isValidRequestId } from '../lib/provider/requestSafety';
 import type {
   PendingRequestMessage,
   PendingZebgenRequest,
@@ -22,6 +23,7 @@ import { readTransactionStatus } from '../lib/wallet/transactionStatus';
 // listener keeps the MV3 service worker alive until sendResponse fires.
 const pendingRequests = new Map<string, PendingZebgenRequest & { connectionAccounts?: ConnectionAccounts }>();
 const pendingResolvers = new Map<string, (response: ZebgenBackgroundResponse) => void>();
+const activeRequestIds = new Set<string>();
 
 export default defineBackground(() => {
   browser.runtime.onConnect.addListener(port => {
@@ -52,7 +54,10 @@ export default defineBackground(() => {
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const internalSender = sender.id === browser.runtime.id && Boolean(sender.url?.startsWith(browser.runtime.getURL('/')));
     if (isProviderRequest(message)) {
-      handleProviderRequest(message).then(sendResponse);
+      handleProviderRequest(message, sender).then(sendResponse).catch(error => {
+        console.error('Zebgen provider request failed', error);
+        sendResponse(errorResponse(error));
+      });
       return true;
     }
     if (isPendingRequestMessage(message)) {
@@ -115,21 +120,29 @@ function errorResponse(err: unknown) {
   return { ok: false, error: err instanceof Error ? err.message : String(err) };
 }
 
-async function handleProviderRequest(request: ZebgenBackgroundRequest): Promise<ZebgenBackgroundResponse> {
+async function handleProviderRequest(request: ZebgenBackgroundRequest, sender: Parameters<typeof assertProviderSender>[1]): Promise<ZebgenBackgroundResponse> {
   try {
-    validateProviderRequest(request.type, request.params);
+    assertProviderSender(request.origin, sender, browser.runtime.id);
   } catch (error) {
     return errorResponse(error);
   }
+  if (!isValidRequestId(request.id) || activeRequestIds.has(request.id)) {
+    return errorResponse(new Error('Invalid or duplicate request id.'));
+  }
+  activeRequestIds.add(request.id);
   try {
+    validateProviderRequest(request.type, request.params);
+    assertAgreementBound(request.type, request.params);
     if (request.type !== 'connect') {
       await assertConnectionAccounts(request.origin, request.params);
     }
-  } catch (err) {
-    return errorResponse(err);
+    return await openApprovalWindow(request);
+  } catch (error) {
+    console.error('Zebgen provider request failed', error);
+    return errorResponse(error);
+  } finally {
+    activeRequestIds.delete(request.id);
   }
-
-  return openApprovalWindow(request);
 }
 
 async function openApprovalWindow(request: ZebgenBackgroundRequest): Promise<ZebgenBackgroundResponse> {
@@ -148,14 +161,24 @@ async function openApprovalWindow(request: ZebgenBackgroundRequest): Promise<Zeb
   });
 
   const popupUrl = browser.runtime.getURL(`/popup.html?zebgenRequestId=${request.id}`);
-  const win = await browser.windows.create({ url: popupUrl, type: 'popup', width: 380, height: 640 });
+  let win;
+  try {
+    win = await browser.windows.create({ url: popupUrl, type: 'popup', width: 380, height: 640 });
+  } catch (error) {
+    pendingRequests.delete(request.id);
+    pendingResolvers.delete(request.id);
+    console.error('Zebgen approval window could not be opened', error);
+    return errorResponse(error);
+  }
 
-  const onDepositClosed = (windowId: number) => {
-    if (windowId === win?.id) pendingResolvers.get(request.id)?.({ ok: false, error: 'Deposit window closed. Check outgoing activity before retrying if Send was pressed.' });
+  const onApprovalClosed = (windowId: number) => {
+    if (windowId === win?.id) pendingResolvers.get(request.id)?.({ ok: false, error: request.type === 'depositLeakSwapMonero'
+      ? 'Deposit window closed. Check outgoing activity before retrying if Send was pressed.'
+      : 'Approval window closed. Request cancelled.' });
   };
-  if (request.type === 'depositLeakSwapMonero') browser.windows.onRemoved.addListener(onDepositClosed);
+  browser.windows.onRemoved.addListener(onApprovalClosed);
   const response = await responsePromise;
-  if (request.type === 'depositLeakSwapMonero') browser.windows.onRemoved.removeListener(onDepositClosed);
+  browser.windows.onRemoved.removeListener(onApprovalClosed);
   pendingRequests.delete(request.id);
   pendingResolvers.delete(request.id);
   if (win?.id !== undefined) {
@@ -184,6 +207,15 @@ async function handlePendingRequestMessage(message: PendingRequestMessage): Prom
         await approveConnection(pending.origin, accounts);
         result = publicConnectionAccounts(accounts);
         await approveOrigin(pending.origin);
+      } else if (pending.type === 'settleLeakSwap') {
+        const receipt = result as { txId?: unknown; confirmedRound?: unknown } | undefined;
+        if (!receipt || typeof receipt.txId !== 'string' || !/^[A-Z2-7]{52}$/.test(receipt.txId)
+          || typeof receipt.confirmedRound !== 'string' || !/^[1-9][0-9]*$/.test(receipt.confirmedRound)) {
+          throw new Error('Invalid settlement receipt.');
+        }
+        result = { txId: receipt.txId, confirmedRound: receipt.confirmedRound };
+        try { await assertConnectionAccounts(pending.origin, pending.params, pending.connectionAccounts); }
+        catch (error) { console.error('Accounts changed after settlement; preserving confirmed receipt', error); }
       } else if (pending.type === 'depositLeakSwapMonero') {
         if (!isSubmittedDepositResult(pending.params as ZebgenDepositLeakSwapMoneroParams, result as ZebgenDepositLeakSwapMoneroResult)) {
           throw new Error('No matching submitted deposit receipt is available. Check outgoing activity before depositing again.');

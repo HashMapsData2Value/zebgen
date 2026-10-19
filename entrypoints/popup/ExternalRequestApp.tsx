@@ -31,6 +31,8 @@ import { resolveLeakSwapDeposit, type LeakSwapDepositTarget } from '../../lib/wa
 import type { ZebgenDepositLeakSwapMoneroParams } from '../../lib/provider/types';
 import LeakSwapDeposit from './LeakSwapDeposit';
 import { recoverLeakSwap, type RecoverLeakSwapParams } from '../../lib/wallet/recoverLeakSwap';
+import { assertAgreementBound } from '../../lib/provider/requestSafety';
+import { settleLeakSwap, type SettleLeakSwapParams } from '../../lib/wallet/settleLeakSwap';
 
 interface ExternalRequestAppProps {
   requestId: string;
@@ -41,7 +43,7 @@ type ApprovalPhase = 'unlocking' | 'validating' | 'monero' | 'signing';
 
 const APPROVAL_PHASE_LABELS: Record<ApprovalPhase, string> = {
   unlocking: 'Unlocking wallet...',
-  validating: 'Validating Algorand transaction...',
+  validating: 'Validating and simulating Algorand transaction...',
   monero: 'Checking Monero deposit...',
   signing: 'Signing Algorand transaction...',
 };
@@ -175,7 +177,7 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
           setScanProgress(progress);
         },
       }, setApprovalPhase);
-      await assertConnectionAccounts(pending.origin, pending.params, accounts ?? undefined);
+      if (pending.type !== 'settleLeakSwap') await assertConnectionAccounts(pending.origin, pending.params, accounts ?? undefined);
       await respond(true, result);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to complete request.');
@@ -232,9 +234,18 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
 
         {pending.type === 'computeMoneroLeakySignature' ? (
           <p className="error">
-            Warning: signing this will permanently reveal your Monero private spend key on the Algorand blockchain.
-            Only do this if you intend to claim or refund this swap right now.
+            Warning: approval gives this site a signature that reveals the selected Monero spend key immediately,
+            even if no Algorand transaction confirms. Simulation also exposes it to the node and cannot guarantee settlement.
+            Only approve if you intend to disclose this swap key share now.
           </p>
+        ) : null}
+
+        {pending.type === 'settleLeakSwap' ? (
+          <div>
+            <p>Application {(pending.params as SettleLeakSwapParams).appId}: {(pending.params as SettleLeakSwapParams).action === 'claim' ? 'claim ALGO to the agreed Xin address' : 'refund ALGO to the agreed Ali address'}.</p>
+            <p>Algorand fee: {(pending.params as SettleLeakSwapParams).action === 'claim' ? '0.007' : '0.005'} ALGO, reimbursed from the sponsor. Claim also applies the agreed protocol fee.</p>
+            <p className="error">Approval discloses this swap spend key to your Algorand node during simulation, even if settlement fails. Zebgen submits the transaction directly; confirmation is not guaranteed.</p>
+          </div>
         ) : null}
 
         {pending.type === 'saveLeakSwap' ? <p>Application {(pending.params as ZebgenSaveLeakSwapParams).appId}</p> : null}
@@ -242,8 +253,12 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
         {pending.type === 'getMoneroShareInfo' ? <p className="privacy-notice">This separate swap-sharing approval shares your Monero private view key, public spend key, and public address with this site. The private view key can expose incoming transactions. Your mnemonic and private spend key are not shared.</p> : null}
         {pending.type === 'createSwapInvite' || pending.type === 'acceptSwapInvite' ? (
           <div>
-            <p>Approval creates and stores an encrypted, dedicated LeakSwap key share before signing the link. Accepting the same invite again reuses its saved share. This does not transfer funds or change your normal Monero funding wallet.</p>
-            <p className="privacy-notice">The link shares the swap share's private view key and public spend key with the site and recipient. The view key exposes incoming swap transactions. Your normal wallet's private view key and all private spend keys stay private. Swap shares are not receive or send wallets.</p>
+            <p>Sign the swap agreement. No funds are transferred.</p>
+            <p className="privacy-notice">The site and recipient can see incoming swap transfers. Your normal wallet's private keys stay private.</p>
+            <details><summary>What this signature shares</summary>
+              <p>Approval creates and stores an encrypted, dedicated LeakSwap key share before signing the link. Accepting the same invite again reuses its saved share. Your normal Monero funding wallet is unchanged.</p>
+              <p>The link shares the swap share's private view key and public spend key. The view key exposes incoming swap transactions. Your normal wallet's private view key and all private spend keys stay private. Swap shares are not receive or send wallets.</p>
+            </details>
             {(() => {
               const terms = pending.type === 'createSwapInvite' ? pending.params as SwapInviteTerms : reviewOffer?.payload;
               if (!terms) return <p>{reviewError ?? 'Verifying invite...'}</p>;
@@ -253,10 +268,13 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
                   <dt>XMR</dt><dd>{(BigInt(terms.xmrAmount) / 1000000000000n).toString()}.{(BigInt(terms.xmrAmount) % 1000000000000n).toString().padStart(12, '0')}</dd>
                   <dt>Deposit deadline</dt><dd>{new Date(terms.t0 * 1000).toISOString()}</dd>
                   <dt>Final expiry</dt><dd>{new Date(terms.t1 * 1000).toISOString()}</dd>
-                  {reviewOffer ? <><dt>Ali</dt><dd style={{ overflowWrap: 'anywhere' }}>{reviewOffer.payload.aliAlgoAddress}</dd>
-                    <dt>Algorand genesis</dt><dd style={{ overflowWrap: 'anywhere' }}>{reviewOffer.payload.algoGenesisHash}</dd>
+                  {reviewOffer ? <><dt>ALGO holder</dt><dd title={reviewOffer.payload.aliAlgoAddress}>{reviewOffer.payload.aliAlgoAddress.slice(0, 8)}...{reviewOffer.payload.aliAlgoAddress.slice(-8)}</dd>
                     <dt>Monero network</dt><dd>{reviewOffer.payload.moneroNetwork}</dd></> : null}
                 </dl>
+                {reviewOffer ? <details><summary>Counterparty and chain details</summary><dl>
+                  <dt>ALGO holder address</dt><dd style={{ overflowWrap: 'anywhere' }}>{reviewOffer.payload.aliAlgoAddress}</dd>
+                  <dt>Algorand genesis</dt><dd style={{ overflowWrap: 'anywhere' }}>{reviewOffer.payload.algoGenesisHash}</dd>
+                </dl></details> : null}
               </>;
             })()}
           </div>
@@ -324,8 +342,10 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
 }
 
 async function computeResult(pending: PendingZebgenRequest, secret: string, control?: MoneroFundingControl, onPhase?: (phase: ApprovalPhase) => void): Promise<unknown> {
+  assertAgreementBound(pending.type, pending.params);
   await assertConnectionAccounts(pending.origin, pending.params);
   const networkSettings = await getNetworkSettings();
+  if (pending.type === 'settleLeakSwap') return settleLeakSwap(pending.params as SettleLeakSwapParams, secret, pending.origin, control?.signal);
   if (pending.type === 'recoverLeakSwapMonero') return recoverLeakSwap(pending.params as RecoverLeakSwapParams, secret);
   if (pending.type === 'createSwapInvite') return createSwapInvite(pending.params as SwapInviteTerms, secret);
   if (pending.type === 'acceptSwapInvite') return acceptSwapInvite((pending.params as { link: string }).link, secret);
@@ -511,6 +531,8 @@ function describeRequest(pending: PendingZebgenRequest): string {
       return (pending.params as ZebgenSaveLeakSwapParams).settlementTxId ? 'Save Confirmed Swap Settlement' : 'Save LeakSwap Recovery Record';
     case 'depositLeakSwapMonero':
       return 'Deposit Monero for Accepted LeakSwap';
+    case 'settleLeakSwap':
+      return (pending.params as SettleLeakSwapParams).action === 'claim' ? 'Claim LeakSwap ALGO' : 'Refund LeakSwap ALGO';
     case 'listLeakSwaps':
       return 'Share Saved LeakSwaps';
     case 'recoverLeakSwapMonero':

@@ -3,6 +3,34 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 import { assertAgreementState, assertAgreementFunding, type SwapAgreement } from 'leakswap-utils/dist/swapAgreement.js';
 import { bytesToBase64 } from '../provider/base64.ts';
 
+// LeakSwap's own calls cost at most 7000 microAlgos; anything near an account balance is a fee-drain attempt.
+export const MAX_SIGNED_FEE_MICROALGOS = 20_000n;
+
+// Covers setReady (102000) plus leakyClaim (107000) paired sponsor legs.
+export const SPONSOR_FUNDING_MICROALGOS = 209_000n;
+
+// Applies to every transaction this wallet signs for a page, bound to an agreement or not.
+export function assertSafeSigningRequest(txns: algosdk.Transaction[], indexesToSign: number[]): void {
+  if (!Array.isArray(indexesToSign) || new Set(indexesToSign).size !== indexesToSign.length
+    || indexesToSign.some((index) => !Number.isInteger(index) || index < 0 || index >= txns.length)) {
+    throw new Error('Invalid list of transactions to sign.');
+  }
+  for (const index of indexesToSign) {
+    const txn = txns[index];
+    if (txn.type !== algosdk.TransactionType.pay && txn.type !== algosdk.TransactionType.appl) {
+      throw new Error('Only payment and application-call transactions can be signed here.');
+    }
+    if (txn.rekeyTo) throw new Error('Refusing to sign a transaction that rekeys the account.');
+    if (txn.payment?.closeRemainderTo) throw new Error('Refusing to sign a payment that closes the account.');
+    if (txn.fee > MAX_SIGNED_FEE_MICROALGOS) throw new Error('Refusing to sign a transaction with an unusually high fee.');
+    const onComplete = txn.applicationCall?.onComplete;
+    if (onComplete !== undefined && onComplete !== algosdk.OnApplicationComplete.NoOpOC
+      && onComplete !== algosdk.OnApplicationComplete.DeleteApplicationOC) {
+      throw new Error('Unsupported application call action.');
+    }
+  }
+}
+
 export function checkAgreementTransaction(txn: algosdk.Transaction, agreement: SwapAgreement, moneroNetwork: string): void {
   if (txn.rekeyTo || txn.payment?.closeRemainderTo) throw new Error('Agreement transactions cannot rekey or close accounts.');
   if (bytesToBase64(txn.genesisHash ?? new Uint8Array()) !== agreement.offer.payload.algoGenesisHash) throw new Error('Agreement transaction network mismatch.');
@@ -29,6 +57,6 @@ export function checkAgreementEscrowPayment(txn: algosdk.Transaction, agreement:
 }
 
 export function checkAgreementSponsorPayment(txn: algosdk.Transaction, agreement: SwapAgreement, sponsor: string): void {
-  if (txn.sender.toString() !== agreement.offer.payload.aliAlgoAddress || txn.payment?.amount !== 209000n
+  if (txn.sender.toString() !== agreement.offer.payload.aliAlgoAddress || txn.payment?.amount !== SPONSOR_FUNDING_MICROALGOS
     || txn.payment.receiver.toString() !== sponsor) throw new Error('Unexpected agreement sponsor funding.');
 }

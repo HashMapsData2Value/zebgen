@@ -11,7 +11,7 @@ import { computeCombinedAddressWithPrivateAndPublic, combinePrivateSpendKeys } f
 import { scanMoneroFunding, type MoneroFundingControl } from '../monero/moneroDaemon';
 import { loadAcceptedSwap, resolveSwapWalletId } from './swapHandshakeVault';
 import { assertAgreementState } from 'leakswap-utils/dist/swapAgreement.js';
-import { checkAgreementTransaction, checkAgreementEscrowPayment, checkAgreementSponsorPayment } from './swapAgreementTransactions';
+import { checkAgreementTransaction, checkAgreementEscrowPayment, checkAgreementSponsorPayment, assertSafeSigningRequest } from './swapAgreementTransactions';
 import type { ZebgenSignAlgorandTransactionsParams } from '../provider/types';
 import { agreementSponsorAddress, assertAgreementPrograms } from './swapAgreementArtifact';
 import { listSignedTransactions, listSwapRecords, saveSignedTransactions, saveSwapRecord, swapRecordKey, type SignedTransactionRecord, type SwapRecord } from './swapRecords';
@@ -113,7 +113,7 @@ export async function saveVerifiedLeakSwap(params: ZebgenSaveLeakSwapParams, sec
     await saveMoneroCombinedContext(record.context, secret);
     if (role === 'xin') {
       const escrow = await algod.accountInformation(algosdk.getApplicationAddress(BigInt(params.appId))).do();
-      if (escrow.amount !== BigInt(agreement.offer.payload.algoAmount)) throw new Error('Escrow balance does not equal the authenticated ALGO amount.');
+      if (escrow.amount < BigInt(agreement.offer.payload.algoAmount)) throw new Error('Escrow balance is below the authenticated ALGO amount.');
     }
     record.agreementDigest = params.agreementDigest;
   }
@@ -147,6 +147,7 @@ export async function verifyAgreementApplication(digest: string, appId: bigint, 
 
 export async function validateAgreementSigning(params: ZebgenSignAlgorandTransactionsParams, secret: string, control?: MoneroFundingControl): Promise<void> {
   const txns = params.txns.map((bytes) => algosdk.decodeUnsignedTransaction(base64ToBytes(bytes)));
+  assertSafeSigningRequest(txns, params.indexesToSign);
   const records = await listSwapRecords(browser.storage.local, secret);
   const bindings = records.filter((record) => record.agreementDigest && txns.some((txn) =>
     bytesToBase64(txn.genesisHash ?? new Uint8Array()) === record.genesisHash
@@ -174,7 +175,7 @@ export async function validateAgreementSigning(params: ZebgenSignAlgorandTransac
   if (bindings.some((record) => record.appId !== appIdText)) throw new Error('Application ID conflicts with the saved agreement binding.');
   await verifyAgreementApplication(digest, appId, secret);
   const { algod } = await chain();
-  const sponsor = await agreementSponsorAddress(algod, appId, agreement);
+  const sponsor = agreementSponsorAddress(appId, agreement);
   const calls = txns.filter((txn) => txn.applicationCall);
   if (calls.length) {
     if (txns.length !== 2 || calls.length !== 1 || txns[1] !== calls[0] || calls[0].applicationCall!.appIndex !== appId
@@ -184,10 +185,13 @@ export async function validateAgreementSigning(params: ZebgenSignAlgorandTransac
     if (!METHODS.some((method) => bytesToHex(algosdk.ABIMethod.fromSignature(method).getSelector()) === selector)) throw new Error('Unexpected agreement method.');
     const ready = selector === bytesToHex(algosdk.ABIMethod.fromSignature(METHODS[0]).getSelector());
     const claim = selector === bytesToHex(algosdk.ABIMethod.fromSignature(METHODS[1]).getSelector());
+    const leaky = claim || selector === bytesToHex(algosdk.ABIMethod.fromSignature(METHODS[2]).getSelector());
     if (ready || claim) {
       const escrow = await algod.accountInformation(algosdk.getApplicationAddress(appId)).do();
-      if (escrow.amount !== BigInt(agreement.offer.payload.algoAmount)) throw new Error('Escrow balance does not equal the authenticated ALGO amount.');
+      // Anyone can add ALGO to the escrow, and the contract pays out all of it, so only a shortfall blocks signing.
+      if (escrow.amount < BigInt(agreement.offer.payload.algoAmount)) throw new Error('Escrow balance is below the authenticated ALGO amount.');
     }
+    if (leaky) throw new Error('Agreement claim and refund must use settleLeakSwap; generic signing is disabled.');
     if (ready) {
       const owner = agreement.offer.payload;
       const counterparty = agreement.acceptance.payload;
@@ -206,7 +210,7 @@ export async function validateAgreementSigning(params: ZebgenSignAlgorandTransac
     checkAgreementEscrowPayment(txns[0], agreement, appId);
     checkAgreementSponsorPayment(txns[1], agreement, sponsor);
     const escrow = await algod.accountInformation(algosdk.getApplicationAddress(appId)).do();
-    if (escrow.amount !== 0n) throw new Error('Escrow is already funded. Check the chain before retrying.');
+    if (escrow.amount >= BigInt(agreement.offer.payload.algoAmount)) throw new Error('Escrow is already funded. Check the chain before retrying.');
   }
 }
 

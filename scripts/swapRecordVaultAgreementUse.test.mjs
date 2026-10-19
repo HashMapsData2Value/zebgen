@@ -96,7 +96,7 @@ function harness(locksAvailable = true) {
     './swapHandshakeVault': { loadAcceptedSwap: async () => agreement, resolveSwapWalletId: async () => 1 },
     'leakswap-utils/dist/swapAgreement.js': { assertAgreementState },
     './swapAgreementTransactions': transactions,
-    './swapAgreementArtifact': { assertAgreementPrograms: () => { }, agreementSponsorAddress: async () => xin.addr.toString() },
+    './swapAgreementArtifact': { assertAgreementPrograms: () => { }, agreementSponsorAddress: () => xin.addr.toString(), agreementSponsorLogicSig: () => new algosdk.LogicSigAccount(new Uint8Array([6, 129, 1])) },
     './swapRecords': {
       listSwapRecords: async () => saved, listSignedTransactions: async () => journal, swapRecordKey: () => 'saved-swap',
       saveSwapRecord: async (_storage, record) => {
@@ -333,7 +333,7 @@ test('funding response-loss retry is rejected once the fresh escrow query shows 
   await assert.rejects(vault.api.validateAgreementSigning(request, 'secret'), /already funded/);
 });
 
-test('funding rejects missing sponsor, wrong sponsor amount and partial existing escrow', async () => {
+test('funding rejects missing sponsor and wrong sponsor amount, but tolerates dust already in the escrow', async () => {
   const vault = harness();
   const request = fundingRequest();
   await assert.rejects(vault.api.validateAgreementSigning({ ...request, txns: request.txns.slice(0, 1), indexesToSign: [0] }, 'secret'), /atomic escrow and sponsor/);
@@ -346,6 +346,8 @@ test('funding rejects missing sponsor, wrong sponsor amount and partial existing
     }, 'secret'), /sponsor funding/);
   }
   vault.algod.accountInformation = () => ({ do: async () => ({ amount: 1n }) });
+  await vault.api.validateAgreementSigning(request, 'secret');
+  vault.algod.accountInformation = () => ({ do: async () => ({ amount: 10000000n }) });
   await assert.rejects(vault.api.validateAgreementSigning(request, 'secret'), /already funded/);
 });
 
@@ -413,4 +415,50 @@ test('share-bound save, list and Set Ready use the share even while the normal w
     txns: group.map(txn => Buffer.from(algosdk.encodeUnsignedTransaction(txn)).toString('base64')), indexesToSign: [1]
   }, 'secret'), /Mature Monero funding is below/);
   assert.equal(vault.scanHeights.length, 1);
+});
+function sponsoredGroup(method) {
+  const suggestedParams = { fee: 1000n, flatFee: true, firstValid: 1n, lastValid: 100n, genesisHash };
+  const group = [algosdk.makePaymentTxnWithSuggestedParamsFromObject({ sender: xin.addr, receiver: ali.addr, amount: 0n, suggestedParams }),
+    algosdk.makeApplicationNoOpTxnFromObject({ sender: ali.addr, appIndex: 42n,
+      appArgs: [algosdk.ABIMethod.fromSignature(method).getSelector()], suggestedParams })];
+  algosdk.assignGroupID(group);
+  return group;
+}
+
+function simulatedVault(simulate) {
+  const vault = harness();
+  vault.algod.accountInformation = () => ({ do: async () => ({ amount: 10000000n }) });
+  const requests = [];
+  vault.algod.simulateTransactions = (request) => { requests.push(request); return { do: async () => simulate() }; };
+  const run = (group) => vault.api.validateAgreementSigning({
+    agreementDigest: digest, agreementAppId: '42', indexesToSign: [1],
+    txns: group.map((txn) => Buffer.from(algosdk.encodeUnsignedTransaction(txn)).toString('base64'))
+  }, 'secret');
+  return { run, requests, vault };
+}
+
+test('generic agreement signing cannot bypass wallet-owned claim or refund settlement', async () => {
+  for (const method of ['leakyClaim(byte[],pay)void', 'leakyRefund(byte[],pay)void']) {
+    const { run, requests, vault } = simulatedVault(async () => ({ txnGroups: [{ failureMessage: 'logic eval error: assert failed' }] }));
+    vault.setScanner(async () => ({ matureAtomic: '0' }));
+    await assert.rejects(run(sponsoredGroup(method)), /must use settleLeakSwap/);
+    assert.equal(requests.length, 0);
+  }
+});
+
+test('a passing node simulation cannot authorize the old generic claim-signing path', async () => {
+  const { run, requests } = simulatedVault(async () => ({ txnGroups: [{}] }));
+  await assert.rejects(run(sponsoredGroup('leakyClaim(byte[],pay)void')), /must use settleLeakSwap/);
+  assert.equal(requests.length, 0);
+});
+
+test('a node that cannot simulate blocks leaky signing instead of letting it through', async () => {
+  const { run } = simulatedVault(async () => { throw new Error('simulate disabled'); });
+  await assert.rejects(run(sponsoredGroup('leakyClaim(byte[],pay)void')), /must use settleLeakSwap/);
+});
+
+test('punish refund does not publish a key share and is not simulated', async () => {
+  const { run, requests } = simulatedVault(async () => ({ txnGroups: [{ failureMessage: 'would fail' }] }));
+  await run(sponsoredGroup('punishRefund(pay)void'));
+  assert.equal(requests.length, 0);
 });

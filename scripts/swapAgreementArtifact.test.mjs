@@ -5,6 +5,7 @@ import test from 'node:test';
 import ts from 'typescript';
 import algosdk from 'algosdk';
 import { bytesToHex } from '@noble/hashes/utils.js';
+import { assembleTeal } from '../lib/wallet/tealAssembler.ts';
 
 const artifactPath = '../contracts/';
 const moduleUrl = new URL('../lib/wallet/swapAgreementArtifact.ts', import.meta.url);
@@ -16,6 +17,7 @@ const compiled = ts.transpileModule(readFileSync(moduleUrl, 'utf8'), {
 const api = {};
 const modules = {
   algosdk,
+  './tealAssembler': { assembleTeal },
   '@noble/hashes/utils.js': { bytesToHex },
   [`${artifactPath}LeakSwap.arc56.json`]: canonical,
   [`${artifactPath}FeeSponsorLSig.teal?raw`]: template,
@@ -47,26 +49,15 @@ test('wallet supports only canonical fee-bearing programs, not legacy or modifie
   assert.throws(() => api.assertAgreementPrograms(approval, new Uint8Array([10])), /supported LeakSwap protocol/);
 });
 
-test('wallet compiles the canonical sponsor template with the agreed parties and application', async () => {
-  const ali = algosdk.generateAccount();
-  const xin = algosdk.generateAccount();
-  const program = new Uint8Array([10, 129, 1, 67]);
-  let compiledSource;
-  const algod = {
-    compile: source => ({
-      do: async () => {
-        compiledSource = new TextDecoder().decode(source);
-        return { result: Buffer.from(program).toString('base64') };
-      }
-    })
-  };
-  const address = await api.agreementSponsorAddress(algod, 123n, {
-    offer: { payload: { aliAlgoAddress: ali.addr.toString() } },
-    acceptance: { payload: { xinAlgoAddress: xin.addr.toString() } }
-  });
-  assert.equal(address, new algosdk.LogicSigAccount(program).address().toString());
-  assert.equal(compiledSource, template.replace(/\bTMPL_APP_ID\b/g, '123')
-    .replace(/\bTMPL_ALI_ADDR\b/g, `0x${bytesToHex(ali.addr.publicKey)}`)
-    .replace(/\bTMPL_XIN_ADDR\b/g, `0x${bytesToHex(xin.addr.publicKey)}`));
-  assert.doesNotMatch(compiledSource, /TMPL_/);
+test('wallet derives exact sponsor bytes and addresses locally without a node compiler', () => {
+  const { vectors } = JSON.parse(readFileSync(new URL('./sponsorVectors.json', import.meta.url), 'utf8'));
+  for (const vector of vectors) {
+    const agreement = {
+      offer: { payload: { aliAlgoAddress: vector.aliAddress } },
+      acceptance: { payload: { xinAlgoAddress: vector.xinAddress } }
+    };
+    const sponsor = api.agreementSponsorLogicSig(BigInt(vector.appId), agreement);
+    assert.equal(Buffer.from(sponsor.lsig.logic).toString('hex'), vector.programHex);
+    assert.equal(api.agreementSponsorAddress(BigInt(vector.appId), agreement), vector.sponsorAddress);
+  }
 });

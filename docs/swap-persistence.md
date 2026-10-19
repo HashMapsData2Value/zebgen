@@ -176,7 +176,8 @@ verifies the application and exact message address. Saving, listing, readiness
 checks and context-bound recovery use the same share identity. Legacy agreements
 continue to use their original selected normal wallet.
 
-Share secrets are not returned in the inventory or sent to the page. Like existing
+Raw private spend keys are not returned in the inventory or sent to the page.
+Leaky signatures nevertheless reveal those keys, as described below. Like existing
 encrypted records, shares survive restarts but not profile deletion or extension
 removal. Portable backup/export is not implemented. No storage reset or migration
 is performed.
@@ -192,9 +193,67 @@ verifies both signatures and checks the active wallets and networks.
 Before deployment signing, Zebgen checks the ABI arguments and supported
 approval/clear bytecode. After deployment it checks the same identities, keys,
 deadlines and bytecode against on-chain state. Sponsor funding must target the
-LogicSig address derived by compiling the protocol TEAL template with the app ID
-and agreed parties. Atomic funding must pay exactly the agreed ALGO amount to
-an empty escrow plus the expected sponsor reserve; a funded escrow blocks retries.
+LogicSig address derived by locally assembling the bundled protocol TEAL template
+with the app ID and agreed parties, without trusting a node compiler response.
+Atomic funding must pay exactly the agreed ALGO amount plus the expected sponsor
+reserve. An already fully funded escrow blocks retries; unsolicited dust or a
+partial balance does not block funding. Deposit and settlement checks require
+at least the agreed escrow amount.
+
+### Wallet-Owned Settlement And Disclosure
+
+Accepted agreements use `settleLeakSwap({ agreementDigest, appId, action })`,
+where action is `claim` or `refund`. The wallet derives the parties, key share,
+sponsor, fees and ABI arguments from its authenticated agreement and bundled
+protocol. Requests cannot supply a signature, recipient, fee or transaction.
+Agreement-bound signature export and generic claim/refund signing are refused,
+including in development builds. The page requires the new API and does not
+fall back to signature export for an accepted agreement.
+
+Before generating the revealing signature, the wallet checks application code
+and state, network, active party, key identity, escrow and sponsor funding,
+readiness and deadlines. It constructs the group locally, generates the leaky
+signature internally, records a transaction reference in the encrypted journal,
+and simulates with the real sponsor LogicSig and an unsigned application call.
+Only a passing simulation permits Algorand signing and direct submission from
+the wallet. The page receives only the confirmed transaction ID and round.
+The wallet serializes settlement attempts and rechecks account, network and
+approval cancellation before signing and broadcasting.
+
+Anyone possessing the leaky signature and public message can recover the spend
+key. The simulation node receives this signature even if simulation fails;
+confirmation and broadcast are not prerequisites for disclosure to that node.
+A successful simulation checks only the node's reported current state, not
+future inclusion or cross-chain settlement. State/deadline races and dishonest
+nodes remain risks. Submission/confirmation failures report an uncertain result
+with a transaction reference, not a claim that disclosure was rolled back.
+The encrypted journal supports later reconciliation; it is not automatic retry.
+
+Unbound development/e2e manual swaps retain the old signature-export API. They
+do not receive the accepted-agreement protections above. Legacy accepted
+agreements use the wallet-owned path but may still disclose their original
+normal-wallet spend key rather than a dedicated share; the approval warning
+therefore applies to the selected swap key, not necessarily a disposable key.
+
+Tests in `scripts/settleLeakSwap.test.mjs` cover local rejection before signature
+generation, simulation rejection/errors, cancellation, storage failure, receipt
+allowlisting and uncertain submission. The opt-in command
+`node --experimental-transform-types --no-warnings scripts/settleLeakSwap.localnet.mjs`
+uses disposable LocalNet accounts/apps to exercise real simulation, signing,
+confirmation, deletion and escrow/sponsor closeout for both claim and refund.
+It does not exercise browser approval or real Monero funding.
+
+The private app's `e2e-ui/walletSettlement.ts` covers the real browser provider,
+encrypted offer/acceptance and share vaults, runtime sender-origin rejection,
+signature-export rejection, premature claim refusal, explicit denial, and a
+confirmed wallet-owned refund followed by rejection of a deleted-app retry.
+It checks receipt-only responses and captures narrow/desktop approval layouts.
+Run with `ZEBGEN_EXTENSION_PATH` pointing at an isolated e2e extension build;
+`LEAKSWAP_TEST_URL` optionally selects the page server. The extension build can
+be isolated with `ZEBGEN_BUILD_OUT_DIR=.output/security-review wxt build --mode e2e`.
+This scenario uses fresh profiles and disposable LocalNet funds, without Monero
+mining or clock changes. It invokes the provider directly from the page, not
+the page's claim/refund buttons, and does not prove a full browser Monero swap.
 
 The saved swap binds the app ID to the digest. Later signing requests referencing
 that app or escrow infer the binding even when the page omits the digest. The

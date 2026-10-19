@@ -15,6 +15,7 @@ import { reserveSwapKey } from './swapKeyUse';
 import { currentRestoreHeight } from '../monero/restoreHeight';
 import { generateMoneroKeyMaterial } from './moneroWallet';
 import { findSwapShare, storeSwapShare } from './swapShareVault';
+import { assertUsablePublicSpendKey } from './spendKeyValidation';
 
 export interface SwapInviteTerms { algoAmount: string; xmrAmount: string; t0: number; t1: number }
 
@@ -92,6 +93,7 @@ export async function acceptSwapInvite(link: string, secret: string) {
   const offer = await parseHandshakeLink(link);
   if (offer.kind !== 'invite') throw new Error('Expected a swap invite link.');
   await verifyHandshake(offer, algosdk.decodeAddress(offer.payload.aliAlgoAddress).publicKey);
+  assertUsablePublicSpendKey(offer.payload.aliPublicSpendKey, 'The ALGO holder’s');
   if (offer.payload.t0 <= Math.floor(Date.now() / 1000)) throw new Error('This swap offer has expired.');
   const owner = await ownIdentity(secret);
   if (owner.genesisHash !== offer.payload.algoGenesisHash || owner.settings.monero.network !== offer.payload.moneroNetwork) throw new Error('Invite networks do not match the wallet networks.');
@@ -119,6 +121,7 @@ export async function confirmSwapAcceptance(link: string, secret: string) {
   const acceptance = await parseHandshakeLink(link);
   if (acceptance.kind !== 'accept') throw new Error('Expected a swap acceptance link.');
   await verifyHandshake(acceptance, algosdk.decodeAddress(acceptance.payload.xinAlgoAddress).publicKey);
+  assertUsablePublicSpendKey(acceptance.payload.xinPublicSpendKey, 'The XMR holder’s');
   const owner = await ownIdentity(secret);
   if (owner.algoAddress === acceptance.payload.xinAlgoAddress) throw new Error('Use Ali’s wallet to confirm the acceptance.');
   const prefix = `leakswapHandshake:${owner.genesisHash}:${owner.algoAddress}:`;

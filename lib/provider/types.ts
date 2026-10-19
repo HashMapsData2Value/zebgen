@@ -11,6 +11,7 @@ export type ZebgenRequestType =
   | 'scanCombinedMoneroFunding'
   | 'saveLeakSwap'
   | 'depositLeakSwapMonero'
+  | 'settleLeakSwap'
   | 'recoverLeakSwapMonero'
   | 'listLeakSwaps'
   | 'createSwapInvite'

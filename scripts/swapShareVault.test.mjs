@@ -7,6 +7,7 @@ import ts from 'typescript';
 import algosdk from 'algosdk';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import * as seedVault from '../lib/wallet/seedVault.ts';
+import * as spendKeyValidation from '../lib/wallet/spendKeyValidation.ts';
 import * as handshake from 'leakswap-utils/dist/swapHandshake.js';
 import * as agreement from 'leakswap-utils/dist/swapAgreement.js';
 import * as contexts from '../lib/wallet/combinedAddressContext.ts';
@@ -79,6 +80,7 @@ function harness() {
     'leakswap-utils/dist/swapHandshake.js': handshake,
     'leakswap-utils/dist/swapAgreement.js': agreement,
     './swapKeyUse': { reserveSwapKey: async () => {} },
+    './spendKeyValidation': spendKeyValidation,
     '../monero/restoreHeight': { currentRestoreHeight: async () => 123 },
   };
   const globals = { navigator };

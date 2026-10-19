@@ -3,7 +3,7 @@ import type { ZebgenScanCombinedMoneroFundingParams } from './types';
 const REQUEST_TYPES = new Set([
   'connect', 'getAlgorandAddress', 'getMoneroShareInfo', 'computeCombinedMoneroAddress',
   'scanCombinedMoneroFunding', 'signAlgorandTransactions', 'computeMoneroLeakySignature',
-  'saveLeakSwap', 'listLeakSwaps', 'depositLeakSwapMonero', 'recoverLeakSwapMonero',
+  'saveLeakSwap', 'listLeakSwaps', 'depositLeakSwapMonero', 'recoverLeakSwapMonero', 'settleLeakSwap',
   'createSwapInvite', 'acceptSwapInvite',
   'confirmSwapAcceptance',
 ]);
@@ -13,6 +13,15 @@ export function validateProviderRequest(type: unknown, params: unknown): void {
     throw new Error('Unsupported Zebgen request type.');
   }
   if (type === 'scanCombinedMoneroFunding') validateFundingParams(params);
+  if (type === 'settleLeakSwap') {
+    const input = params as Record<string, unknown> | null;
+    if (!input || Array.isArray(input) || Object.keys(input).sort().join(',') !== 'action,agreementDigest,appId'
+      || typeof input.agreementDigest !== 'string' || !/^[0-9a-f]{64}$/.test(input.agreementDigest)
+      || typeof input.appId !== 'string' || !/^[1-9][0-9]{0,19}$/.test(input.appId)
+      || BigInt(input.appId) > 0xffffffffffffffffn || !['claim', 'refund'].includes(input.action as string)) {
+      throw new Error('Invalid LeakSwap settlement identity.');
+    }
+  }
   if (type === 'recoverLeakSwapMonero') {
     const input = params as Record<string, unknown> | null;
     if (!input || Array.isArray(input) || Object.keys(input).some(key => !['appId', 'settlementTxId'].includes(key))

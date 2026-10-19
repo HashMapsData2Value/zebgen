@@ -1,4 +1,5 @@
-const PBKDF2_ITERATIONS = 100_000;
+// Older wallets used 100,000 and will no longer unlock; acceptable while the wallet is testnet-only.
+const PBKDF2_ITERATIONS = 600_000;
 
 function asArrayBufferView(bytes: Uint8Array): Uint8Array {
   return new Uint8Array(

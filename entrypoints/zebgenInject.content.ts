@@ -55,6 +55,7 @@ export default defineContentScript({
       scanCombinedMoneroFunding: (params) => request('scanCombinedMoneroFunding', params),
       saveLeakSwap: (params) => request('saveLeakSwap', params),
       depositLeakSwapMonero: (params) => request('depositLeakSwapMonero', params),
+      settleLeakSwap: (params) => request('settleLeakSwap', params),
       recoverLeakSwapMonero: (params) => request('recoverLeakSwapMonero', params),
       listLeakSwaps: () => request('listLeakSwaps'),
       createSwapInvite: (params) => request('createSwapInvite', params),
@@ -90,6 +91,7 @@ interface ZebgenProvider {
   }>;
   saveLeakSwap: (params: ZebgenSaveLeakSwapParams) => Promise<{ appId: string }>;
   depositLeakSwapMonero: (params: ZebgenDepositLeakSwapMoneroParams) => Promise<ZebgenDepositLeakSwapMoneroResult>;
+  settleLeakSwap: (params: import('../lib/wallet/settleLeakSwap').SettleLeakSwapParams) => Promise<import('../lib/wallet/settleLeakSwap').SettleLeakSwapResult>;
   listLeakSwaps: () => Promise<{ swaps: ZebgenSavedLeakSwap[] }>;
   recoverLeakSwapMonero: (params: import('../lib/wallet/recoverLeakSwap').RecoverLeakSwapParams) => Promise<import('../lib/wallet/recoverLeakSwap').RecoverLeakSwapResult>;
   scanCombinedMoneroFunding: (params: ZebgenScanCombinedMoneroFundingParams) => Promise<ZebgenScanCombinedMoneroFundingResult>;

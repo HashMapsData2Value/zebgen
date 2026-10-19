@@ -3,6 +3,7 @@ import { nodePolyfills } from 'vite-plugin-node-polyfills';
 
 // See https://wxt.dev/api/config.html
 export default defineConfig({
+  outDir: process.env.ZEBGEN_BUILD_OUT_DIR ?? '.output',
   modules: ['@wxt-dev/module-react'],
   manifest: ({ manifestVersion }) => ({
     name: 'Zebgen Wallet',
