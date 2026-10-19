@@ -1,3 +1,10 @@
+# [1.6.0](https://github.com/HashMapsData2Value/zebgen/compare/v1.5.1...v1.6.0) (2026-10-19)
+
+
+### Features
+
+* **site:** add browser logos and latest release download links ([bcc22de](https://github.com/HashMapsData2Value/zebgen/commit/bcc22de583c9eb44f99d1f02a22582027f2b7a6d))
+
 ## [1.5.1](https://github.com/HashMapsData2Value/zebgen/compare/v1.5.0...v1.5.1) (2026-10-19)
 
 
