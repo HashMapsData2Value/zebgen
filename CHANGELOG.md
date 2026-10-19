@@ -1,3 +1,11 @@
+# [1.5.0](https://github.com/HashMapsData2Value/zebgen/compare/v1.4.0...v1.5.0) (2026-10-19)
+
+
+### Features
+
+* **security:** execute agreement settlements entirely inside Zebgen ([4f7c2a9](https://github.com/HashMapsData2Value/zebgen/commit/4f7c2a9ae2714e5c2980cad05a45fd82bf5cecaa))
+* **wallet:** support multiple Algorand mnemonics and active address inventories ([5baee91](https://github.com/HashMapsData2Value/zebgen/commit/5baee918fa9f472ea5ebef4dd3478df132cc11da))
+
 # [1.4.0](https://github.com/HashMapsData2Value/zebgen/compare/v1.3.0...v1.4.0) (2026-10-18)
 
 
