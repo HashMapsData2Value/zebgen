@@ -1,3 +1,10 @@
+# [1.8.0](https://github.com/HashMapsData2Value/zebgen/compare/v1.7.1...v1.8.0) (2026-10-19)
+
+
+### Features
+
+* **monero:** persist incremental scans across popup closure ([c01fd4e](https://github.com/HashMapsData2Value/zebgen/commit/c01fd4e6ed65f7fb5675bca79119efa62d45bca5))
+
 ## [1.7.1](https://github.com/HashMapsData2Value/zebgen/compare/v1.7.0...v1.7.1) (2026-10-19)
 
 
