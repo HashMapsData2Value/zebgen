@@ -1,25 +1,59 @@
 import { browser } from 'wxt/browser';
 import { scanMoneroBalance } from '../../lib/monero/moneroDaemon';
-import { ScanJobs, scanJobKey } from '../../lib/monero/scanJobs';
+import { ScanJobs } from '../../lib/monero/scanJobs';
 import './style.css';
 
-let currentKey: string | undefined;
 const status = document.querySelector<HTMLElement>('#status')!;
-const jobs = new ScanJobs(scanMoneroBalance, (key, event) => {
-  if (key === currentKey)
-    status.textContent =
-      event.type === 'progress'
-        ? `Block ${event.progress.scannedHeight.toLocaleString()} / ${event.progress.targetHeight.toLocaleString()}`
-        : event.result.ok
+const stop = document.querySelector<HTMLButtonElement>('#stop')!;
+const scans = document.createElement('div');
+scans.className = 'scan-list';
+document.querySelector('main')!.append(scans);
+function renderScans() {
+  const states = jobs.states;
+  const active = states.filter((job) => !job.result).length;
+  status.textContent = active
+    ? `${active} active scan${active === 1 ? '' : 's'}`
+    : states.length
+      ? 'All scans finished'
+      : 'Waiting for scan...';
+  stop.disabled = active === 0;
+  scans.replaceChildren(
+    ...states.map((job) => {
+      const row = document.createElement('section');
+      row.className = 'scan-row';
+      const address = document.createElement('p');
+      address.className = 'scan-address';
+      address.textContent = job.address;
+      const progress = document.createElement('p');
+      progress.textContent = job.result
+        ? job.result.ok
           ? 'Scan complete'
-          : (event.result.error ?? 'Scan failed');
+          : (job.result.error ?? 'Scan failed')
+        : job.progress
+          ? `Block ${job.progress.scannedHeight.toLocaleString()} / ${job.progress.targetHeight.toLocaleString()}`
+          : 'Starting scan...';
+      row.append(address, progress);
+      if (!job.result) {
+        const button = document.createElement('button');
+        button.textContent = 'Stop scan';
+        button.addEventListener('click', () => jobs.stop(job.key));
+        row.append(button);
+      }
+      return row;
+    }),
+  );
+}
+const jobs = new ScanJobs(scanMoneroBalance, (key, event) => {
+  renderScans();
   void browser.runtime
     .sendMessage({ type: 'monero:scanEvent', key, event })
     .catch((error) => console.error('Monero scan viewer notification failed', error));
 });
 document.querySelector('#stop')!.addEventListener('click', () => {
-  if (currentKey) jobs.stop(currentKey);
+  for (const job of jobs.states) if (!job.result) jobs.stop(job.key);
 });
+stop.textContent = 'Stop all scans';
+renderScans();
 void navigator.locks
   .request('zebgen-monero-scan-host', { ifAvailable: true }, async (lock) => {
     if (!lock) {
@@ -36,9 +70,9 @@ void navigator.locks
       }
       if (message.action === 'stop') jobs.stop(message.key);
       else {
-        currentKey = scanJobKey(message.request);
         jobs.start(message.request);
       }
+      renderScans();
       sendResponse({ ok: true });
       return false;
     });

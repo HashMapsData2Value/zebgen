@@ -88,7 +88,14 @@ test(
       assert.equal(host.isClosed(), false);
       for (const width of [360, 1180]) {
         await host.setViewportSize({ width, height: 740 });
-        assert.equal(await host.locator('h1').innerText(), 'Monero Scan');
+        assert.equal(await host.locator('h1').innerText(), 'Scanning Monero Blocks...');
+        assert.match(await host.locator('.description').innerText(), /Keep this tab open/);
+        assert.equal(
+          await host
+            .locator('.brand img')
+            .evaluate((image) => image.complete && image.naturalWidth > 0),
+          true,
+        );
         assert.equal(
           await host.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
           true,

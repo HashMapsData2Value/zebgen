@@ -15,7 +15,12 @@ export function scanJobKey(request: ScanMoneroBalanceRequest): string {
 }
 
 type Progress = { scannedHeight: number; targetHeight: number };
-type Job = { controller: AbortController; progress?: Progress; result?: ScanMoneroBalanceResult };
+type Job = {
+  address: string;
+  controller: AbortController;
+  progress?: Progress;
+  result?: ScanMoneroBalanceResult;
+};
 
 export class ScanJobs {
   private jobs = new Map<string, Job>();
@@ -40,7 +45,7 @@ export class ScanJobs {
       if (existing.progress) this.notify(key, { type: 'progress', progress: existing.progress });
       return;
     }
-    const job: Job = { controller: new AbortController() };
+    const job: Job = { address: request.primaryAddress, controller: new AbortController() };
     this.jobs.set(key, job);
     void this.scan(request, {
       signal: job.controller.signal,
@@ -61,6 +66,14 @@ export class ScanJobs {
 
   stop(key: string): void {
     this.jobs.get(key)?.controller.abort();
+  }
+  get states() {
+    return [...this.jobs.entries()].map(([key, job]) => ({
+      key,
+      address: job.address,
+      progress: job.progress,
+      result: job.result,
+    }));
   }
   isActive(key: string): boolean {
     const job = this.jobs.get(key);

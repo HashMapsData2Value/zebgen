@@ -101,3 +101,39 @@ test('reattaching viewers shares one job, replays progress and explicit stop can
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(jobs.active, false);
 });
+
+test('different addresses run independently and one completion never completes the other', async () => {
+  const controls = new Map();
+  const finishes = new Map();
+  const { ScanJobs, scanJobKey } = load('../lib/monero/scanJobs.ts', {
+    '../wallet/moneroBalanceCache': { balanceCheckpointKey: (...parts) => JSON.stringify(parts) },
+  });
+  const jobs = new ScanJobs(
+    (request, control) => {
+      controls.set(request.primaryAddress, control);
+      return new Promise((resolve) => finishes.set(request.primaryAddress, resolve));
+    },
+    () => {},
+  );
+  const first = {
+    config: { network: 'mainnet', daemon: { uri: 'https://node.invalid' } },
+    primaryAddress: 'first',
+    restoreHeight: 0,
+  };
+  const second = { ...first, primaryAddress: 'second' };
+  jobs.start(first);
+  jobs.start(second);
+  assert.equal(jobs.states.length, 2);
+  assert.equal(controls.get('first').signal.aborted, false);
+  finishes.get('first')({ ok: true, balanceAtomic: '0' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(jobs.isActive(scanJobKey(first)), false);
+  assert.equal(jobs.isActive(scanJobKey(second)), true);
+  assert.equal(jobs.active, true);
+  jobs.start(first);
+  assert.equal(jobs.states.find((job) => job.address === 'first').result, undefined);
+  jobs.stop(scanJobKey(first));
+  assert.equal(controls.get('second').signal.aborted, false);
+  finishes.get('first')({ ok: false, error: 'stopped' });
+  finishes.get('second')({ ok: true, balanceAtomic: '0' });
+});
