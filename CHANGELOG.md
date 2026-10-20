@@ -1,3 +1,10 @@
+## [1.8.1](https://github.com/HashMapsData2Value/zebgen/compare/v1.8.0...v1.8.1) (2026-10-20)
+
+
+### Bug Fixes
+
+* **monero:** track concurrent scans and clear stale completion status ([5f71c5c](https://github.com/HashMapsData2Value/zebgen/commit/5f71c5c06a1bf4f3a1fa3befb61489a26c312556))
+
 # [1.8.0](https://github.com/HashMapsData2Value/zebgen/compare/v1.7.1...v1.8.0) (2026-10-19)
 
 
