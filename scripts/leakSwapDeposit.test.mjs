@@ -12,7 +12,7 @@ function load(path, dependencies = {}, globals = {}) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
   }).outputText;
   runInNewContext(code, { exports: api, TextDecoder, console: { error() {} }, ...globals,
-    require: name => { if (name in dependencies) return dependencies[name]; throw new Error(`Unexpected dependency ${name}`); },
+    require: name => { if (name in dependencies) return dependencies[name]; if (name === 'lucide-react') return { LoaderCircle: () => null }; if (name.endsWith('.css')) return {}; throw new Error(`Unexpected dependency ${name}`); },
   });
   return api;
 }
@@ -172,7 +172,8 @@ function panel() {
     if (predicate(element)) return element;
     for (const child of [element.props?.children].flat(Infinity)) { const found = find(child, predicate); if (found) return found; }
   };
-  render(); const stop = effects[0]();
+  render(); const cleanups = effects.map(effect => effect()).filter(cleanup => typeof cleanup === 'function');
+  const stop = () => cleanups.forEach(cleanup => cleanup());
   const text = element => typeof element === 'string' ? element : element?.props ? [element.props.children].flat(Infinity).map(text).join(' ') : '';
   return { calls, control, stop, text: () => text(render()),
     button: label => find(render(), element => element.type === 'button' && element.props.children === label),

@@ -12,7 +12,9 @@ import { deriveActiveSeedAlgoAddressAtIndex, signSwapHandshake } from './algoWal
 import { encryptSeed, decryptSeed } from './seedVault';
 import { reserveSwapKey } from './swapKeyUse';
 import { currentRestoreHeight } from '../monero/restoreHeight';
-import { generateMoneroKeyMaterial } from './moneroWallet';
+import { generateMoneroKeyMaterial, computeCombinedAddressWithPrivateAndPublic } from './moneroWallet';
+import { assertSwapAffordability } from './swapAffordability';
+import type { MoneroFundingControl } from '../monero/moneroDaemon';
 import { findSwapShare, storeSwapShare, unlockSwapShare } from './swapShareVault';
 import { assertUsablePublicSpendKey } from './spendKeyValidation';
 import { assertSwapFundingTime } from './swapTimingPolicy';
@@ -79,7 +81,7 @@ export async function createSwapInvite(terms: SwapInviteTerms, secret: string) {
   return { offer, offerDigest: digest, link: await buildHandshakeUrl('https://app.leakswap.com', offer) };
 }
 
-export async function acceptSwapInvite(link: string, secret: string) {
+export async function acceptSwapInvite(link: string, secret: string, control?: MoneroFundingControl) {
   const offer = await parseHandshakeLink(link);
   if (offer.kind !== 'invite') throw new Error('Expected a swap invite link.');
   await verifyHandshake(offer, algosdk.decodeAddress(offer.payload.aliAlgoAddress).publicKey);
@@ -90,12 +92,18 @@ export async function acceptSwapInvite(link: string, secret: string) {
   if (owner.algoAddress === offer.payload.aliAlgoAddress) throw new Error('Use Xin’s wallet to accept this offer.');
   const digest = await offerDigest(offer.payload);
   const savedKey = `leakswapHandshake:${owner.genesisHash}:${owner.algoAddress}:${offer.payload.offerId}:accept`;
-  if ((await browser.storage.local.get(savedKey))[savedKey] !== undefined) {
-    const saved = await loadAcceptedSwap(digest, secret);
+  const saved = (await browser.storage.local.get(savedKey))[savedKey] !== undefined
+    ? await loadAcceptedSwap(digest, secret) : null;
+  const candidate = saved
+    ? await unlockSwapShare(await resolveSwapWalletId(digest, secret), secret, owner.settings.monero.network)
+    : generateMoneroKeyMaterial(owner.settings.monero.networkType);
+  const combined = computeCombinedAddressWithPrivateAndPublic(candidate.privateSpendKey, candidate.privateViewKey, offer.payload.aliPrivateViewKey, offer.payload.aliPublicSpendKey, owner.settings.monero.networkType);
+  await assertSwapAffordability(owner.settings.monero, offer.payload.xmrAmount, combined.combinedAddress, secret, control);
+  assertSwapFundingTime(offer.payload);
+  if (saved) {
     return { ...saved, link: await buildHandshakeUrl('https://app.leakswap.com', saved.acceptance) };
   }
-  assertSwapFundingTime(offer.payload);
-  const walletId = await storeSwapShare({ digest, genesisHash: owner.genesisHash, algoAddress: owner.algoAddress, network: owner.settings.monero.network }, generateMoneroKeyMaterial(owner.settings.monero.networkType), secret);
+  const walletId = await storeSwapShare({ digest, genesisHash: owner.genesisHash, algoAddress: owner.algoAddress, network: owner.settings.monero.network }, candidate, secret);
   const material = await unlockSwapShare(walletId, secret, owner.settings.monero.network);
   const payload = {
     offerDigest: digest, xinAlgoAddress: owner.algoAddress,

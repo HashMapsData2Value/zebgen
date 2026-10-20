@@ -293,6 +293,15 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
         ) : null}
 
         {isBusy && pending.type === 'scanCombinedMoneroFunding' ? <ScanApprovalProgress progress={scanProgress} /> : null}
+        {isBusy && pending.type === 'acceptSwapInvite' ? (
+          <section className="deposit-progress" role="status" aria-live="polite">
+            <div>
+              <h3>Checking XMR funding before acceptance</h3>
+              <p>Scanning the selected funding wallet and preparing a deposit without sending it to verify the amount and network fee. No XMR is sent or reserved. This can take a minute or longer.</p>
+              {scanProgress ? <p>Scanned block {scanProgress.scannedHeight.toLocaleString()} of {scanProgress.targetHeight.toLocaleString()}.</p> : null}
+            </div>
+          </section>
+        ) : null}
 
         {stage === 'consent' ? (
           <ConnectDisclosure accounts={connectAccounts} choices={choices} disabled={isBusy} onChange={setConnectAccounts} />
@@ -351,7 +360,10 @@ async function computeResult(pending: PendingZebgenRequest, secret: string, cont
   if (pending.type === 'settleLeakSwap') return settleLeakSwap(pending.params as SettleLeakSwapParams, secret, pending.origin, control?.signal);
   if (pending.type === 'recoverLeakSwapMonero') return recoverLeakSwap(pending.params as RecoverLeakSwapParams, secret);
   if (pending.type === 'createSwapInvite') return createSwapInvite(pending.params as SwapInviteTerms, secret);
-  if (pending.type === 'acceptSwapInvite') return acceptSwapInvite((pending.params as { link: string }).link, secret);
+  if (pending.type === 'acceptSwapInvite') {
+    onPhase?.('monero');
+    return acceptSwapInvite((pending.params as { link: string }).link, secret, control);
+  }
   if (pending.type === 'confirmSwapAcceptance') return confirmSwapAcceptance((pending.params as { link: string }).link, secret);
 
   if (pending.type === 'getAlgorandAddress') {
