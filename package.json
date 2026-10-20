@@ -5,6 +5,10 @@
   "version": "1.8.0",
   "type": "module",
   "scripts": {
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "format:staged": "node scripts/check-staged-format.mjs",
+    "hooks:install": "git config --local core.hooksPath .githooks",
     "dev": "wxt",
     "dev:firefox": "wxt -b firefox",
     "build": "wxt build",
@@ -43,6 +47,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@wxt-dev/module-react": "^1.1.5",
+    "prettier": "3.6.2",
     "semantic-release": "^24.2.3",
     "typescript": "^5.9.3",
     "vite-plugin-node-polyfills": "^0.28.0",
