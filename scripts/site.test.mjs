@@ -44,6 +44,9 @@ test('website builds from source and brand assets without installed packages', a
     }
     assert.ok(html.includes('https://github.com/HashMapsData2Value/zebgen/releases/latest'));
     assert.ok(html.includes('https://leakswap.com'));
+    for (const faucet of ['https://lora.algokit.io/testnet/fund', 'https://faucet-stagenet.xmr.nodely.dev/']) {
+      assert.ok(html.includes(`href="${faucet}" target="_blank" rel="noopener noreferrer"`));
+    }
     assert.deepEqual(await readFile(path.join(output, 'assets/zebgen.png')), await readFile(new URL('assets/brand/zebgen-mark-violet-128.png', root)));
     assert.ok(!/ZebGen|Zebgen/.test(html));
     assert.ok(theme.includes('zebgen-luminescence'));
