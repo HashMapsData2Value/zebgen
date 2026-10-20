@@ -1,3 +1,10 @@
+# [1.9.0](https://github.com/HashMapsData2Value/zebgen/compare/v1.8.1...v1.9.0) (2026-10-20)
+
+
+### Features
+
+* **wallet:** clarify Monero scan progress and credit Nodely ([f35f19f](https://github.com/HashMapsData2Value/zebgen/commit/f35f19f243f91c82e51889a3125811fcd93afac2))
+
 ## [1.8.1](https://github.com/HashMapsData2Value/zebgen/compare/v1.8.0...v1.8.1) (2026-10-20)
 
 
