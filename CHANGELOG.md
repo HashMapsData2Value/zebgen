@@ -1,3 +1,10 @@
+## [1.9.1](https://github.com/HashMapsData2Value/zebgen/compare/v1.9.0...v1.9.1) (2026-10-20)
+
+
+### Bug Fixes
+
+* **wallet:** verify XMR affordability before accepting swaps ([763350f](https://github.com/HashMapsData2Value/zebgen/commit/763350f0290456f8b6079074738d1f98c4749105))
+
 # [1.9.0](https://github.com/HashMapsData2Value/zebgen/compare/v1.8.1...v1.9.0) (2026-10-20)
 
 
