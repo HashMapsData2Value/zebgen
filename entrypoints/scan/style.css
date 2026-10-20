@@ -1,11 +1,13 @@
 :root {
-  font-family: 'Avenir Next', sans-serif;
-  color: #19251e;
-  background: #fafcf8;
+  font-family: 'Space Grotesk', 'Avenir Next', 'Segoe UI', sans-serif;
+  color: #ece7ff;
+  background: #04020b;
+  color-scheme: dark;
   font-synthesis: none;
   letter-spacing: 0;
-  --green: #275642;
-  --line: #d6ded3;
+  --accent: #be9dff;
+  --muted: #c2b8d9;
+  --line: #39284f;
 }
 * {
   box-sizing: border-box;
@@ -26,7 +28,7 @@ body {
   object-fit: contain;
 }
 .brand-dot {
-  color: var(--green);
+  color: var(--accent);
 }
 main {
   width: min(100% - 48px, 640px);
@@ -36,8 +38,8 @@ main {
   display: inline-block;
   margin: 0 0 24px;
   padding: 6px 10px;
-  color: var(--green);
-  background: #c9f261;
+  color: var(--accent);
+  background: #211333;
   font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
@@ -52,7 +54,7 @@ h1 {
 .description {
   max-width: 560px;
   margin: 0;
-  color: #4e6055;
+  color: var(--muted);
   font-size: 16px;
   line-height: 1.7;
 }
@@ -78,8 +80,8 @@ button {
   font: inherit;
   font-size: 14px;
   font-weight: 600;
-  color: var(--green);
-  border: 1px solid var(--green);
+  color: var(--accent);
+  border: 1px solid var(--accent);
   border-radius: 4px;
   min-height: 44px;
   padding: 10px 18px;
@@ -87,7 +89,7 @@ button {
   cursor: pointer;
 }
 button:hover {
-  background: #e9f0e5;
+  background: #211333;
 }
 button:disabled {
   opacity: 0.5;
@@ -102,11 +104,11 @@ button:disabled {
   font-size: 14px;
 }
 .scan-address {
-  color: #4e6055;
+  color: var(--muted);
   font-family: monospace;
 }
 button:focus-visible {
-  outline: 3px solid #b24875;
+  outline: 3px solid var(--accent);
   outline-offset: 4px;
 }
 @media (max-width: 480px) {

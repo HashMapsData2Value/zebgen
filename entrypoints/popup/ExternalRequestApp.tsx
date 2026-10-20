@@ -30,6 +30,7 @@ import { connectionChoices, type ConnectionChoices } from '../../lib/provider/co
 import { resolveLeakSwapDeposit, type LeakSwapDepositTarget } from '../../lib/wallet/leakSwapDeposit';
 import type { ZebgenDepositLeakSwapMoneroParams } from '../../lib/provider/types';
 import LeakSwapDeposit from './LeakSwapDeposit';
+import ScanApprovalProgress from './ScanApprovalProgress';
 import { recoverLeakSwap, type RecoverLeakSwapParams } from '../../lib/wallet/recoverLeakSwap';
 import { assertAgreementBound } from '../../lib/provider/requestSafety';
 import { settleLeakSwap, type SettleLeakSwapParams } from '../../lib/wallet/settleLeakSwap';
@@ -60,7 +61,7 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
   const [isBusy, setIsBusy] = useState(false);
   const [approvalPhase, setApprovalPhase] = useState<ApprovalPhase>('unlocking');
   const scanController = useRef<AbortController | null>(null);
-  const [scanProgress, setScanProgress] = useState<{ scannedHeight: number; targetHeight: number } | null>(null);
+  const [scanProgress, setScanProgress] = useState<{ scannedHeight: number; targetHeight: number; startHeight?: number } | null>(null);
   const [reviewOffer, setReviewOffer] = useState<SignedOffer | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
   useEffect(() => {
@@ -291,6 +292,8 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
           </p>
         ) : null}
 
+        {isBusy && pending.type === 'scanCombinedMoneroFunding' ? <ScanApprovalProgress progress={scanProgress} /> : null}
+
         {stage === 'consent' ? (
           <ConnectDisclosure accounts={connectAccounts} choices={choices} disabled={isBusy} onChange={setConnectAccounts} />
         ) : null}
@@ -335,7 +338,7 @@ function ExternalRequestApp({ requestId }: ExternalRequestAppProps) {
           {approvalPhase === 'monero' && scanProgress
             ? `Checking Monero deposit: block ${scanProgress.scannedHeight.toLocaleString()} of ${scanProgress.targetHeight.toLocaleString()}`
             : APPROVAL_PHASE_LABELS[approvalPhase]}
-        </p> : isBusy && scanProgress ? <p role="status">Scanning Monero: block {scanProgress.scannedHeight.toLocaleString()} of {scanProgress.targetHeight.toLocaleString()}</p> : null}
+        </p> : isBusy && scanProgress && pending.type !== 'scanCombinedMoneroFunding' ? <p role="status">Scanning Monero: block {scanProgress.scannedHeight.toLocaleString()} of {scanProgress.targetHeight.toLocaleString()}</p> : null}
       </section>
     </main>
   );

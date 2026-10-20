@@ -43,7 +43,7 @@ export interface MoneroFundingResult {
 
 export interface MoneroFundingControl {
   signal?: AbortSignal;
-  onProgress?: (progress: { scannedHeight: number; targetHeight: number }) => void;
+  onProgress?: (progress: { scannedHeight: number; targetHeight: number; startHeight?: number }) => void;
 }
 
 export async function scanMoneroFunding(
@@ -73,12 +73,21 @@ export async function scanMoneroFunding(
   ).scanFunding;
   if (!scan)
     throw new Error('The Monero WASM library needs the scanFunding update to check funding.');
+  control?.signal?.throwIfAborted();
+  if (control?.onProgress) {
+    const targetHeight = await daemonHeight(...daemonConnection(config));
+    control.signal?.throwIfAborted();
+    control.onProgress({ scannedHeight: restoreHeight, targetHeight, startHeight: restoreHeight });
+  }
   const result = await scan(
     ...daemonConnection(config),
     publicSpendKey,
     privateViewKey,
     restoreHeight,
-    control,
+    control ? {
+      ...control,
+      onProgress: (progress) => control.onProgress?.({ ...progress, startHeight: restoreHeight }),
+    } : undefined,
   );
   return {
     receivedAtomic: result.receivedAtomic,

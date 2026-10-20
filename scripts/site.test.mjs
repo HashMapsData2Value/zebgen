@@ -44,6 +44,8 @@ test('website builds from source and brand assets without installed packages', a
     }
     assert.ok(html.includes('https://github.com/HashMapsData2Value/zebgen/releases/latest'));
     assert.ok(html.includes('https://leakswap.com'));
+    assert.ok(html.includes('Nodes are graciously hosted by'));
+    assert.ok(html.includes('href="https://nodely.io" target="_blank" rel="noopener noreferrer">Nodely.io</a>, but you are free to use your own.'));
     for (const faucet of ['https://lora.algokit.io/testnet/fund', 'https://faucet-stagenet.xmr.nodely.dev/']) {
       assert.ok(html.includes(`href="${faucet}" target="_blank" rel="noopener noreferrer"`));
     }
